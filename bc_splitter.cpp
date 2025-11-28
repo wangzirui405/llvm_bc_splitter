@@ -22,6 +22,9 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/Verifier.h"
+// 新增：Clone模式所需的头文件
+#include "llvm/Transforms/Utils/Cloning.h"  // 包含 CloneModule 和 ValueToValueMapTy
+#include "llvm/IR/ValueMap.h"              // ValueToValueMapTy 的详细定义
 
 using namespace llvm;
 using namespace std;
@@ -86,6 +89,15 @@ private:
     ofstream logFile;
     int totalGroups = 0;  // 新增：总分组数
 
+    // 新增：Clone模式配置
+    enum SplitMode {
+        MANUAL_MODE,    // 手动创建函数签名
+        CLONE_MODE      // 使用LLVM CloneModule
+    };
+
+    SplitMode currentMode = MANUAL_MODE;
+    bool enableCloneMode = false;
+
     // 新增：存储需要调整为external的函数
     unordered_set<Function*> functionsNeedExternal;
     // 在 BCModuleSplitter 类中添加新的日志方法
@@ -118,6 +130,169 @@ private:
         }
     }
 
+private:
+    // 新增：使用LLVM CloneModule创建BC文件
+    bool createBCFileWithClone(const unordered_set<Function*>& group,
+                              const string& filename,
+                              int groupIndex) {
+        logToFile("使用Clone模式创建BC文件: " + filename + " (组 " + to_string(groupIndex) + ")");
+
+        // 使用ValueToValueMapTy进行克隆
+        ValueToValueMapTy vmap;
+        auto newModule = CloneModule(*module, vmap);
+
+        if (!newModule) {
+            logError("CloneModule失败: " + filename);
+            return false;
+        }
+
+        // 设置模块名称
+        newModule->setModuleIdentifier("cloned_group_" + to_string(groupIndex));
+
+        // 处理函数：保留组内函数定义，其他转为声明
+        processClonedModuleFunctions(*newModule, group);
+
+        // 处理全局变量：全部转为external声明
+        processClonedModuleGlobals(*newModule);
+
+        // 标记原始函数已处理
+        for (Function* origFunc : group) {
+            if (functionMap.count(origFunc)) {
+                functionMap[origFunc].groupIndex = groupIndex;
+                functionMap[origFunc].isProcessed = true;
+            }
+        }
+
+        logToFile("Clone模式完成: " + filename + " (包含 " + to_string(group.size()) + " 个函数)");
+        return writeBitcodeSafely(*newModule, filename);
+    }
+
+    // 新增：处理克隆模块中的函数
+    void processClonedModuleFunctions(Module& clonedModule, const unordered_set<Function*>& targetGroup) {
+        unordered_set<string> targetFunctionNames;
+
+        // 收集目标函数名称
+        for (Function* func : targetGroup) {
+            if (func) {
+                targetFunctionNames.insert(func->getName().str());
+            }
+        }
+
+        // 处理所有函数
+        vector<Function*> functionsToProcess;
+        for (Function& func : clonedModule) {
+            functionsToProcess.push_back(&func);
+        }
+
+        for (Function* func : functionsToProcess) {
+            string funcName = func->getName().str();
+
+            if (targetFunctionNames.find(funcName) != targetFunctionNames.end()) {
+                // 目标函数：保留为定义，设置合适的链接属性
+                if (func->getLinkage() == GlobalValue::InternalLinkage ||
+                    func->getLinkage() == GlobalValue::PrivateLinkage) {
+                    func->setLinkage(GlobalValue::ExternalLinkage);
+                    func->setVisibility(GlobalValue::DefaultVisibility);
+                    logToFile("目标函数链接调整: " + funcName + " -> External");
+                }
+            } else {
+                // 非目标函数：转为声明
+                if (!func->isDeclaration()) {
+                    func->deleteBody();
+                    func->setLinkage(GlobalValue::ExternalLinkage);
+                    func->setVisibility(GlobalValue::DefaultVisibility);
+                    logToFile("非目标函数转为声明: " + funcName);
+                }
+            }
+        }
+    }
+
+    // 新增：处理克隆模块中的全局变量
+    void processClonedModuleGlobals(Module& clonedModule) {
+        for (GlobalVariable& global : clonedModule.globals()) {
+            // 移除初始值，转为外部声明
+            if (global.hasInitializer()) {
+                global.setInitializer(nullptr);
+            }
+
+            // 设置external链接和默认可见性
+            global.setLinkage(GlobalValue::ExternalLinkage);
+            global.setVisibility(GlobalValue::DefaultVisibility);
+
+            logToFile("全局变量处理: " + global.getName().str() + " -> External");
+        }
+    }
+
+    // 新增：统一的BC文件创建入口，支持两种模式
+    bool createBCFile(const unordered_set<Function*>& group,
+                     const string& filename,
+                     int groupIndex) {
+        if (currentMode == CLONE_MODE) {
+            return createBCFileWithClone(group, filename, groupIndex);
+        } else {
+            return createBCFileWithSignatures(group, filename, groupIndex);
+        }
+    }
+
+    // 新增：获取剩余函数列表
+    vector<pair<Function*, int>> getRemainingFunctions() {
+        vector<pair<Function*, int>> remainingFunctions;
+        for (const auto& pair : functionMap) {
+            if (!pair.second.isProcessed) {
+                int totalScore = pair.second.outDegree + pair.second.inDegree;
+                remainingFunctions.emplace_back(pair.first, totalScore);
+            }
+        }
+
+        // 按总分降序排序
+        std::sort(remainingFunctions.begin(), remainingFunctions.end(),
+            [](const pair<Function*, int>& a, const pair<Function*, int>& b) {
+                return a.second > b.second;
+            });
+
+        return remainingFunctions;
+    }
+
+    // 新增：按范围获取函数组
+    unordered_set<Function*> getFunctionGroupByRange(const vector<pair<Function*, int>>& functions,
+                                                   int start, int end) {
+        unordered_set<Function*> group;
+        for (int i = start; i < functions.size(); i++) {
+            if (end != -1 && i >= end) break;
+
+            Function* func = functions[i].first;
+            if (!func || functionMap[func].isProcessed) continue;
+
+            group.insert(func);
+        }
+        return group;
+    }
+
+    // 新增：简化验证方法
+    bool quickValidateBCFile(const string& filename) {
+        LLVMContext tempContext;
+        SMDiagnostic err;
+        auto testModule = parseIRFile(filename, err, tempContext);
+
+        if (!testModule) {
+            logError("快速验证失败 - 无法加载: " + filename);
+            return false;
+        }
+
+        string verifyResult;
+        raw_string_ostream rso(verifyResult);
+        bool moduleValid = !verifyModule(*testModule, &rso);
+
+        if (moduleValid) {
+            log("✓ 快速验证通过: " + filename);
+        } else {
+            logError("快速验证失败: " + filename);
+            logError("错误详情: " + rso.str());
+        }
+
+        return moduleValid;
+    }
+
 public:
     BCModuleSplitter() {
         // 打开日志文件
@@ -134,6 +309,13 @@ public:
             logFile << "=== BC Splitter 日志结束 ===" << endl;
             logFile.close();
         }
+    }
+
+    // 新增：设置Clone模式
+    void setCloneMode(bool enable) {
+        enableCloneMode = enable;
+        currentMode = enable ? CLONE_MODE : MANUAL_MODE;
+        log("设置拆分模式: " + string(enable ? "CLONE_MODE" : "MANUAL_MODE"));
     }
 
     void log(const string& message) {
@@ -1225,6 +1407,7 @@ public:
     // 修改后的拆分方法 - 按照指定数量范围分组
     void splitBCFiles(const string& outputPrefix) {
         log("\n开始拆分BC文件...");
+        log("当前模式: " + string(currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE"));
 
         int fileCount = 0;
 
@@ -1247,28 +1430,65 @@ public:
             unordered_set<Function*> highInDegreeSet(highInDegreeFuncs.begin(), highInDegreeFuncs.end());
             string filename = outputPrefix + "_group_high_in_degree.bc";
 
-            if (createHighInDegreeBCFile(highInDegreeSet, filename)) {
+            if (createBCFile(highInDegreeSet, filename, 1)) {
                 unordered_set<Function*> completeHighInDegreeSet = getHighInDegreeWithOutDegreeFunctions(highInDegreeSet);
-                if (verifyAndFixBCFile(filename, completeHighInDegreeSet)) {
-                    log("✓ 高入度函数BC文件验证通过: " + filename);
 
-                    // 显示高入度函数组的详细信息
+                bool verified = false;
+                if (currentMode == CLONE_MODE) {
+                    if (quickValidateBCFile(filename)) {
+                        verified = true;
+                        log("✓ Clone模式高入度函数BC文件验证通过: " + filename);
+                    }
+                } else {
+                    if (verifyAndFixBCFile(filename, completeHighInDegreeSet)) {
+                        verified = true;
+                        log("✓ 高入度函数BC文件验证通过: " + filename);
+                    }
+                }
+
+                if (verified) {
+                    // 显示高入度函数组的详细信息 - 完整打印
                     log("高入度函数组详情:");
                     int highInDegreeCount = 0;
                     int outDegreeCount = 0;
+
+                    // 首先打印高入度函数
+                    log("=== 高入度函数列表 ===");
                     for (Function* func : completeHighInDegreeSet) {
                         if (highInDegreeSet.find(func) != highInDegreeSet.end()) {
-                            log("  高入度函数: " + functionMap[func].displayName +
-                                " [入度: " + to_string(functionMap[func].inDegree) + "]");
+                            const FunctionInfo& info = functionMap[func];
+                            string funcType = info.isUnnamed ?
+                                "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                                "有名函数";
+                            log("  高入度函数: " + info.displayName +
+                                " [" + funcType +
+                                ", 入度: " + to_string(info.inDegree) +
+                                ", 出度: " + to_string(info.outDegree) +
+                                ", 链接: " + getLinkageString(func->getLinkage()) + "]");
                             highInDegreeCount++;
-                        } else {
-                            log("  出度函数: " + functionMap[func].displayName +
-                                " [被高入度函数调用]");
+                        }
+                    }
+
+                    // 然后打印出度函数
+                    log("=== 出度函数列表 ===");
+                    for (Function* func : completeHighInDegreeSet) {
+                        if (highInDegreeSet.find(func) == highInDegreeSet.end()) {
+                            const FunctionInfo& info = functionMap[func];
+                            string funcType = info.isUnnamed ?
+                                "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                                "有名函数";
+                            log("  出度函数: " + info.displayName +
+                                " [" + funcType +
+                                ", 入度: " + to_string(info.inDegree) +
+                                ", 出度: " + to_string(info.outDegree) +
+                                ", 链接: " + getLinkageString(func->getLinkage()) + "]");
                             outDegreeCount++;
                         }
                     }
-                    log("  高入度函数: " + to_string(highInDegreeCount) + " 个");
-                    log("  出度函数: " + to_string(outDegreeCount) + " 个");
+
+                    log("统计: 高入度函数: " + to_string(highInDegreeCount) + " 个");
+                    log("统计: 出度函数: " + to_string(outDegreeCount) + " 个");
+                    log("统计: 总计: " + to_string(completeHighInDegreeSet.size()) + " 个函数");
                 } else {
                     logError("✗ 高入度函数BC文件验证失败: " + filename);
                 }
@@ -1283,14 +1503,37 @@ public:
             unordered_set<Function*> isolatedSet(isolatedFuncs.begin(), isolatedFuncs.end());
             string filename = outputPrefix + "_group_isolated.bc";
 
-            if (createIsolatedFunctionsBCFile(isolatedSet, filename)) {
-                if (verifyAndFixBCFile(filename, isolatedSet)) {
-                    log("✓ 孤立函数BC文件验证通过: " + filename);
-                    log("孤立函数组详情:");
-                    for (Function* func : isolatedSet) {
-                        log("  孤立函数: " + functionMap[func].displayName);
+            if (createBCFile(isolatedSet, filename, 2)) {
+                bool verified = false;
+                if (currentMode == CLONE_MODE) {
+                    if (quickValidateBCFile(filename)) {
+                        verified = true;
+                        log("✓ Clone模式孤立函数BC文件验证通过: " + filename);
                     }
-                    log("  总计: " + to_string(isolatedSet.size()) + " 个孤立函数");
+                } else {
+                    if (verifyAndFixBCFile(filename, isolatedSet)) {
+                        verified = true;
+                        log("✓ 孤立函数BC文件验证通过: " + filename);
+                    }
+                }
+
+                if (verified) {
+                    // 显示孤立函数组的详细信息 - 完整打印
+                    log("孤立函数组详情:");
+                    int isolatedCount = 0;
+                    for (Function* func : isolatedSet) {
+                        const FunctionInfo& info = functionMap[func];
+                        string funcType = info.isUnnamed ?
+                            "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                            "有名函数";
+                        log("  孤立函数: " + info.displayName +
+                            " [" + funcType +
+                            ", 入度: " + to_string(info.inDegree) +
+                            ", 出度: " + to_string(info.outDegree) +
+                            ", 链接: " + getLinkageString(func->getLinkage()) + "]");
+                        isolatedCount++;
+                    }
+                    log("统计: 总计: " + to_string(isolatedCount) + " 个孤立函数");
                 } else {
                     logError("✗ 孤立函数BC文件验证失败: " + filename);
                 }
@@ -1302,19 +1545,7 @@ public:
         log("开始按照指定数量范围分组...");
 
         // 获取所有未处理的函数并按总分排序
-        vector<pair<Function*, int>> remainingFunctions;
-        for (const auto& pair : functionMap) {
-            if (!pair.second.isProcessed) {
-                int totalScore = pair.second.outDegree + pair.second.inDegree;
-                remainingFunctions.emplace_back(pair.first, totalScore);
-            }
-        }
-
-        // 按总分降序排序
-        std::sort(remainingFunctions.begin(), remainingFunctions.end(),
-            [](const pair<Function*, int>& a, const pair<Function*, int>& b) -> bool {
-                return a.second > b.second;
-            });
+        vector<pair<Function*, int>> remainingFunctions = getRemainingFunctions();
 
         log("剩余未处理函数数量: " + to_string(remainingFunctions.size()));
 
@@ -1335,15 +1566,7 @@ public:
             int end = range.second;
 
             // 收集该范围内的函数
-            unordered_set<Function*> group;
-            for (int i = start; i < remainingFunctions.size(); i++) {
-                if (end != -1 && i >= end) break;
-
-                Function* func = remainingFunctions[i].first;
-                if (!func || functionMap[func].isProcessed) continue;
-
-                group.insert(func);
-            }
+            unordered_set<Function*> group = getFunctionGroupByRange(remainingFunctions, start, end);
 
             if (group.empty()) {
                 log("组 " + to_string(groupIndex) + " 没有函数，跳过");
@@ -1357,23 +1580,38 @@ public:
 
             // 创建BC文件
             string filename = outputPrefix + "_group_" + to_string(groupIndex) + ".bc";
-            if (createBCFileWithSignatures(group, filename, groupIndex)) {
+            if (createBCFile(group, filename, groupIndex)) {
                 // 验证并修复生成的BC文件
-                if (verifyAndFixBCFile(filename, group)) {
-                    log("✓ BC文件验证通过: " + filename);
+                bool verified = false;
+                if (currentMode == CLONE_MODE) {
+                    if (quickValidateBCFile(filename)) {
+                        verified = true;
+                        log("✓ Clone模式分组BC文件验证通过: " + filename);
+                    }
+                } else {
+                    if (verifyAndFixBCFile(filename, group)) {
+                        verified = true;
+                        log("✓ 分组BC文件验证通过: " + filename);
+                    }
+                }
 
-                    // 显示组中的前几个函数作为示例
-                    string funcList = "  前10个函数: ";
-                    int count = 0;
+                if (verified) {
+                    // 显示组中的所有函数 - 完整打印
+                    log("组 " + to_string(groupIndex) + " 函数列表:");
+                    int funcCount = 0;
                     for (Function* f : group) {
-                        if (count >= 10) break;
-                        funcList += functionMap[f].displayName + " ";
-                        count++;
+                        const FunctionInfo& info = functionMap[f];
+                        string funcType = info.isUnnamed ?
+                            "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                            "有名函数";
+                        log("  " + to_string(++funcCount) + ". " + info.displayName +
+                            " [" + funcType +
+                            ", 入度: " + to_string(info.inDegree) +
+                            ", 出度: " + to_string(info.outDegree) +
+                            ", 总分: " + to_string(info.inDegree + info.outDegree) +
+                            ", 链接: " + getLinkageString(f->getLinkage()) + "]");
                     }
-                    if (group.size() > 10) {
-                        funcList += "... (共" + to_string(group.size()) + "个)";
-                    }
-                    log(funcList);
+                    log("组 " + to_string(groupIndex) + " 统计: 共 " + to_string(group.size()) + " 个函数");
                 } else {
                     logError("✗ BC文件验证失败: " + filename);
                 }
@@ -1390,6 +1628,7 @@ public:
 
         log("\n=== 拆分完成 ===");
         log("共生成 " + to_string(fileCount) + " 个分组BC文件");
+        log("使用模式: " + string(currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE"));
 
         // 统计处理情况
         int processedCount = 0;
@@ -1403,21 +1642,24 @@ public:
         if (processedCount < functionMap.size()) {
             logWarning("警告: 有 " + to_string(functionMap.size() - processedCount) + " 个函数未被处理");
 
-            // 显示未处理的函数
-            log("未处理函数列表:");
-            int count = 0;
+            // 显示所有未处理的函数 - 完整打印
+            log("未处理函数完整列表:");
+            int unprocessedCount = 0;
             for (const auto& pair : functionMap) {
                 if (!pair.second.isProcessed) {
-                    log("  " + pair.second.displayName +
-                        " [出度: " + to_string(pair.second.outDegree) +
-                        ", 入度: " + to_string(pair.second.inDegree) + "]");
-                    count++;
-                    if (count >= 20) {  // 限制输出数量
-                        log("  ... (还有 " + to_string(functionMap.size() - processedCount - count) + " 个函数)");
-                        break;
-                    }
+                    const FunctionInfo& info = pair.second;
+                    string funcType = info.isUnnamed ?
+                        "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                        "有名函数";
+                    log("  " + to_string(++unprocessedCount) + ". " + info.displayName +
+                        " [" + funcType +
+                        ", 出度: " + to_string(info.outDegree) +
+                        ", 入度: " + to_string(info.inDegree) +
+                        ", 总分: " + to_string(info.outDegree + info.inDegree) +
+                        ", 链接: " + (info.funcPtr ? getLinkageString(info.funcPtr->getLinkage()) : "N/A") + "]");
                 }
             }
+            log("未处理函数统计: 共 " + to_string(unprocessedCount) + " 个函数");
         }
     }
 
@@ -1695,11 +1937,20 @@ public:
         if (sys::fs::exists(highInDegreeFilename)) {
             totalFiles++;
             ofstream individualLog = createIndividualLogFile(highInDegreeFilename, "_validation");
-            if (quickValidateBCFileWithLog(highInDegreeFilename, individualLog)) {
-                logToIndividualLog(individualLog, "✓ 快速验证通过", true);
-                validFiles++;
+            if (currentMode == CLONE_MODE) {
+                if (quickValidateBCFile(highInDegreeFilename)) {
+                    logToIndividualLog(individualLog, "✓ Clone模式验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ Clone模式验证失败", true);
+                }
             } else {
-                logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                if (quickValidateBCFileWithLog(highInDegreeFilename, individualLog)) {
+                    logToIndividualLog(individualLog, "✓ 快速验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                }
             }
             individualLog.close();
         }
@@ -1709,11 +1960,20 @@ public:
         if (sys::fs::exists(isolatedFilename)) {
             totalFiles++;
             ofstream individualLog = createIndividualLogFile(isolatedFilename, "_validation");
-            if (quickValidateBCFileWithLog(isolatedFilename, individualLog)) {
-                logToIndividualLog(individualLog, "✓ 快速验证通过", true);
-                validFiles++;
+            if (currentMode == CLONE_MODE) {
+                if (quickValidateBCFile(isolatedFilename)) {
+                    logToIndividualLog(individualLog, "✓ Clone模式验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ Clone模式验证失败", true);
+                }
             } else {
-                logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                if (quickValidateBCFileWithLog(isolatedFilename, individualLog)) {
+                    logToIndividualLog(individualLog, "✓ 快速验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                }
             }
             individualLog.close();
         }
@@ -1729,11 +1989,20 @@ public:
             totalFiles++;
             ofstream individualLog = createIndividualLogFile(filename, "_validation");
 
-            if (quickValidateBCFileWithLog(filename, individualLog)) {
-                logToIndividualLog(individualLog, "✓ 快速验证通过", true);
-                validFiles++;
+            if (currentMode == CLONE_MODE) {
+                if (quickValidateBCFile(filename)) {
+                    logToIndividualLog(individualLog, "✓ Clone模式验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ Clone模式验证失败", true);
+                }
             } else {
-                logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                if (quickValidateBCFileWithLog(filename, individualLog)) {
+                    logToIndividualLog(individualLog, "✓ 快速验证通过", true);
+                    validFiles++;
+                } else {
+                    logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+                }
             }
             individualLog.close();
         }
@@ -1742,6 +2011,7 @@ public:
         log("总计文件: " + to_string(totalFiles));
         log("有效文件: " + to_string(validFiles));
         log("无效文件: " + to_string(totalFiles - validFiles));
+        log("使用模式: " + string(currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE"));
 
         if (validFiles == totalFiles && totalFiles > 0) {
             log("✓ 所有BC文件验证通过！");
@@ -1767,7 +2037,8 @@ public:
 
         report << "=== BC文件分组报告 ===" << endl;
         report << "总函数数: " << functionMap.size() << endl;
-        report << "总分组数: " << totalGroups << endl << endl;
+        report << "总分组数: " << totalGroups << endl;
+        report << "使用模式: " << (currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE") << endl << endl;
 
         // 按组统计
         unordered_map<int, vector<string>> groupFunctions;
@@ -1776,9 +2047,12 @@ public:
         for (const auto& pair : functionMap) {
             const FunctionInfo& info = pair.second;
             if (info.groupIndex >= 0) {
-                groupFunctions[info.groupIndex].push_back(info.displayName +
-                    " (入度:" + to_string(info.inDegree) +
-                    ", 出度:" + to_string(info.outDegree) + ")");
+                string funcInfo = info.displayName +
+                    " [入度:" + to_string(info.inDegree) +
+                    ", 出度:" + to_string(info.outDegree) +
+                    ", 总分:" + to_string(info.inDegree + info.outDegree) +
+                    (info.isUnnamed ? ", 无名函数序号:" + to_string(info.sequenceNumber) : ", 有名函数") + "]";
+                groupFunctions[info.groupIndex].push_back(funcInfo);
             } else {
                 ungroupedCount++;
             }
@@ -1789,29 +2063,33 @@ public:
         // 全局变量组（组0）
         report << "组 0 (全局变量):" << endl;
         unordered_set<GlobalVariable*> globals = getGlobalVariables();
+        int globalCount = 0;
         for (GlobalVariable* global : globals) {
             if (global) {
-                report << "  " << global->getName().str() << endl;
+                report << "  " << to_string(++globalCount) << ". " << global->getName().str()
+                       << " [链接: " << getLinkageString(global->getLinkage()) << "]" << endl;
             }
         }
-        report << endl;
+        report << "总计: " << globalCount << " 个全局变量" << endl << endl;
 
         // 高入度函数组（组1）
         if (groupFunctions.count(1)) {
             report << "组 1 (高入度函数):" << endl;
+            int count = 0;
             for (const string& funcName : groupFunctions[1]) {
-                report << "  " << funcName << endl;
+                report << "  " << to_string(++count) << ". " << funcName << endl;
             }
-            report << endl;
+            report << "总计: " << groupFunctions[1].size() << " 个函数" << endl << endl;
         }
 
         // 孤立函数组（组2）
         if (groupFunctions.count(2)) {
             report << "组 2 (孤立函数):" << endl;
+            int count = 0;
             for (const string& funcName : groupFunctions[2]) {
-                report << "  " << funcName << endl;
+                report << "  " << to_string(++count) << ". " << funcName << endl;
             }
-            report << endl;
+            report << "总计: " << groupFunctions[2].size() << " 个函数" << endl << endl;
         }
 
         // 新的分组策略（组3-8）
@@ -1827,36 +2105,27 @@ public:
         for (int i = 3; i <= 8; i++) {
             if (groupFunctions.count(i)) {
                 report << "组 " << i << " (" << groupDescriptions[i-3] << "):" << endl;
-                report << "  函数数量: " << groupFunctions[i].size() << endl;
-
-                // 只显示前20个函数作为示例
-                int showCount = min(20, (int)groupFunctions[i].size());
-                for (int j = 0; j < showCount; j++) {
-                    report << "  " << groupFunctions[i][j] << endl;
+                int count = 0;
+                for (const string& funcName : groupFunctions[i]) {
+                    report << "  " << to_string(++count) << ". " << funcName << endl;
                 }
-                if (groupFunctions[i].size() > showCount) {
-                    report << "  ... (还有 " << (groupFunctions[i].size() - showCount) << " 个函数)" << endl;
-                }
-                report << endl;
+                report << "总计: " << groupFunctions[i].size() << " 个函数" << endl << endl;
             }
         }
 
         if (ungroupedCount > 0) {
             report << "=== 未分组函数 ===" << endl;
             report << "未分组函数数量: " << ungroupedCount << endl;
-            int showCount = min(50, ungroupedCount);
             int count = 0;
             for (const auto& pair : functionMap) {
                 if (pair.second.groupIndex < 0) {
-                    report << "  " << pair.second.displayName <<
-                        " (入度:" << pair.second.inDegree <<
-                        ", 出度:" << pair.second.outDegree << ")" << endl;
-                    count++;
-                    if (count >= showCount) break;
+                    const FunctionInfo& info = pair.second;
+                    report << "  " << to_string(++count) << ". " << info.displayName <<
+                        " [入度:" << info.inDegree <<
+                        ", 出度:" << info.outDegree <<
+                        ", 总分:" << (info.inDegree + info.outDegree) <<
+                        (info.isUnnamed ? ", 无名函数序号:" + to_string(info.sequenceNumber) : ", 有名函数") << "]" << endl;
                 }
-            }
-            if (ungroupedCount > showCount) {
-                report << "  ... (还有 " << (ungroupedCount - showCount) << " 个函数)" << endl;
             }
         }
 
@@ -1866,20 +2135,35 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        cerr << "用法: " << argv[0] << " <输入.bc> <输出前缀>" << endl;
+    if (argc < 3 || argc > 4) {
+        cerr << "用法: " << argv[0] << " <输入.bc> <输出前缀> [--clone]" << endl;
+        cerr << "选项:" << endl;
+        cerr << "  --clone    使用LLVM Clone模式（默认使用手动模式）" << endl;
         return 1;
     }
 
     string inputFile = argv[1];
     string outputPrefix = argv[2];
+    bool useCloneMode = false;
+
+    // 解析命令行参数
+    if (argc == 4) {
+        string option = argv[3];
+        if (option == "--clone") {
+            useCloneMode = true;
+        }
+    }
 
     cout << "BC文件拆分工具启动..." << endl;
     cout << "输入文件: " << inputFile << endl;
     cout << "输出前缀: " << outputPrefix << endl;
+    cout << "模式: " << (useCloneMode ? "CLONE_MODE" : "MANUAL_MODE") << endl;
 
     try {
         BCModuleSplitter splitter;
+
+        // 设置模式
+        splitter.setCloneMode(useCloneMode);
 
         if (!splitter.loadBCFile(inputFile)) {
             cerr << "无法加载BC文件: " << inputFile << endl;
@@ -1890,34 +2174,11 @@ int main(int argc, char* argv[]) {
         splitter.printFunctionInfo();
         splitter.splitBCFiles(outputPrefix);
 
-        // 执行批量验证
+        // 批量验证
         splitter.validateAllBCFiles(outputPrefix);
 
-        // 生成分组报告
+        // 生成报告
         splitter.generateGroupReport(outputPrefix);
-
-        // 详细分析生成的BC文件内容
-        string globalsFilename = outputPrefix + "_group_globals.bc";
-        if (sys::fs::exists(globalsFilename)) {
-            splitter.analyzeBCFileContent(globalsFilename);
-        }
-
-        string highInDegreeFilename = outputPrefix + "_group_high_in_degree.bc";
-        if (sys::fs::exists(highInDegreeFilename)) {
-            splitter.analyzeBCFileContent(highInDegreeFilename);
-        }
-
-        string isolatedFilename = outputPrefix + "_group_isolated.bc";
-        if (sys::fs::exists(isolatedFilename)) {
-            splitter.analyzeBCFileContent(isolatedFilename);
-        }
-
-        for (int i = 3; i <= 12; i++) {
-            string filename = outputPrefix + "_group_" + to_string(i) + ".bc";
-            if (sys::fs::exists(filename)) {
-                splitter.analyzeBCFileContent(filename);
-            }
-        }
 
         splitter.log("程序执行完成");
     } catch (const std::exception& e) {
