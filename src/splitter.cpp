@@ -160,7 +160,7 @@ void BCModuleSplitter::printFunctionInfo() {
     }
 }
 
-// 更新后的生成分组报告方法
+// 更新后的生成分组报告方法，添加最终拆分完成后的bc文件的各个链接属性和可见性
 void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
     string reportFile = outputPrefix + "_group_report.txt";
     auto& functionMap = common.getFunctionMap();
@@ -203,7 +203,8 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
     for (GlobalVariable* global : globals) {
         if (global) {
             report << "  " << to_string(++globalCount) << ". " << global->getName().str()
-                    << " [链接: " << getLinkageString(global->getLinkage()) << "]" << endl;
+                    << " [链接: " << getLinkageString(global->getLinkage())
+                    << ", 可见性: " << getVisibilityString(global->getVisibility()) << "]" << endl;
         }
     }
     report << "总计: " << globalCount << " 个全局变量" << endl << endl;
@@ -265,8 +266,155 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
         }
     }
 
+    // 新增：最终拆分完成后的BC文件链接属性和可见性报告
+    report << "=== 最终拆分BC文件链接属性和可见性报告 ===" << endl << endl;
+
+    // 定义所有可能的BC文件组
+    vector<pair<string, int>> bcFiles = {
+        {"_group_globals.bc", 0},
+        {"_group_high_in_degree.bc", 1},
+        {"_group_isolated.bc", 2}
+    };
+
+    // 添加组3-8
+    for (int i = 3; i <= 8; i++) {
+        bcFiles.emplace_back("_group_" + to_string(i) + ".bc", i);
+    }
+
+    // 检查每个BC文件并报告链接属性和可见性
+    for (const auto& bcFileInfo : bcFiles) {
+        string filename = outputPrefix + bcFileInfo.first;
+        int groupIndex = bcFileInfo.second;
+
+        if (!sys::fs::exists(filename)) {
+            continue;
+        }
+
+        report << "文件: " << filename << " (组 " << groupIndex << ")" << endl;
+
+        // 加载BC文件进行分析
+        LLVMContext tempContext;
+        SMDiagnostic err;
+        auto testModule = parseIRFile(filename, err, tempContext);
+
+        if (!testModule) {
+            report << "  错误: 无法加载文件进行分析" << endl;
+            continue;
+        }
+
+        // 统计信息
+        int totalFuncs = 0;
+        int externalLinkageCount = 0;
+        int internalLinkageCount = 0;
+        int privateLinkageCount = 0;
+        int defaultVisibilityCount = 0;
+        int hiddenVisibilityCount = 0;
+        int protectedVisibilityCount = 0;
+
+        // 分析全局变量（仅对组0）
+        if (groupIndex == 0) {
+            report << "  全局变量分析:" << endl;
+            int globalVarCount = 0;
+            for (auto& global : testModule->globals()) {
+                globalVarCount++;
+                report << "    " << globalVarCount << ". " << global.getName().str()
+                       << " [链接: " << getLinkageString(global.getLinkage())
+                       << ", 可见性: " << getVisibilityString(global.getVisibility()) << "]" << endl;
+
+                // 统计链接属性
+                if (global.getLinkage() == GlobalValue::ExternalLinkage) externalLinkageCount++;
+                else if (global.getLinkage() == GlobalValue::InternalLinkage) internalLinkageCount++;
+                else if (global.getLinkage() == GlobalValue::PrivateLinkage) privateLinkageCount++;
+
+                // 统计可见性
+                if (global.getVisibility() == GlobalValue::DefaultVisibility) defaultVisibilityCount++;
+                else if (global.getVisibility() == GlobalValue::HiddenVisibility) hiddenVisibilityCount++;
+                else if (global.getVisibility() == GlobalValue::ProtectedVisibility) protectedVisibilityCount++;
+            }
+            report << "  总计: " << globalVarCount << " 个全局变量" << endl;
+        }
+
+        // 分析函数（对组1-8）
+        if (groupIndex >= 1) {
+            report << "  函数分析:" << endl;
+            for (auto& func : *testModule) {
+                totalFuncs++;
+                report << "    " << totalFuncs << ". " << func.getName().str()
+                       << " [链接: " << getLinkageString(func.getLinkage())
+                       << ", 可见性: " << getVisibilityString(func.getVisibility())
+                       << (func.isDeclaration() ? ", 声明" : ", 定义") << "]" << endl;
+
+                // 统计链接属性
+                if (func.getLinkage() == GlobalValue::ExternalLinkage) externalLinkageCount++;
+                else if (func.getLinkage() == GlobalValue::InternalLinkage) internalLinkageCount++;
+                else if (func.getLinkage() == GlobalValue::PrivateLinkage) privateLinkageCount++;
+
+                // 统计可见性
+                if (func.getVisibility() == GlobalValue::DefaultVisibility) defaultVisibilityCount++;
+                else if (func.getVisibility() == GlobalValue::HiddenVisibility) hiddenVisibilityCount++;
+                else if (func.getVisibility() == GlobalValue::ProtectedVisibility) protectedVisibilityCount++;
+            }
+            report << "  总计: " << totalFuncs << " 个函数" << endl;
+        }
+
+        // 输出统计摘要
+        report << "  链接属性统计:" << endl;
+        report << "    External链接: " << externalLinkageCount << endl;
+        report << "    Internal链接: " << internalLinkageCount << endl;
+        report << "    Private链接: " << privateLinkageCount << endl;
+
+        report << "  可见性统计:" << endl;
+        report << "    Default可见性: " << defaultVisibilityCount << endl;
+        report << "    Hidden可见性: " << hiddenVisibilityCount << endl;
+        report << "    Protected可见性: " << protectedVisibilityCount << endl;
+
+        // 验证模块
+        string verifyResult;
+        raw_string_ostream rso(verifyResult);
+        bool moduleValid = !verifyModule(*testModule, &rso);
+        report << "  模块验证: " << (moduleValid ? "通过" : "失败") << endl;
+
+        if (!moduleValid) {
+            report << "  验证错误: " << rso.str() << endl;
+        }
+
+        report << endl;
+    }
+
+    // 添加所有BC文件的总体统计
+    report << "=== 所有BC文件总体统计 ===" << endl;
+
+    int totalBCFiles = 0;
+    int validBCFiles = 0;
+    vector<string> existingFiles;
+
+    // 检查文件是否存在并统计
+    for (const auto& bcFileInfo : bcFiles) {
+        string filename = outputPrefix + bcFileInfo.first;
+        if (sys::fs::exists(filename)) {
+            totalBCFiles++;
+            existingFiles.push_back(filename);
+        }
+    }
+
+    report << "生成的BC文件总数: " << totalBCFiles << endl;
+    report << "存在的BC文件列表:" << endl;
+    for (const auto& file : existingFiles) {
+        report << "  " << file << endl;
+    }
+
+    report << endl << "=== 报告生成完成 ===" << endl;
+    report << "报告文件: " << reportFile << endl;
+    report << "生成时间: " << __DATE__ << " " << __TIME__ << endl;
+
     report.close();
     logger.log("分组报告已生成: " + reportFile);
+
+    // 同时在日志中输出关键统计信息
+    logger.log("最终拆分完成: 共生成 " + to_string(totalBCFiles) + " 个BC文件");
+    for (const auto& file : existingFiles) {
+        logger.log("  - " + file);
+    }
 }
 
 std::vector<llvm::Function*> BCModuleSplitter::getHighInDegreeFunctions(int threshold) {

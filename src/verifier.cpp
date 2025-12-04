@@ -170,6 +170,7 @@ unordered_set<string> BCVerifier::analyzeVerifierErrorsWithLog(const string& ver
     unordered_map<string, Function*> nameToFunc;
     unordered_map<int, Function*> sequenceToFunc;  // 只包含无名函数的序号映射
     unordered_map<string, string> escapedToOriginal;
+    std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
 
     // 新增：记录所有无名函数的原始名称和序号
     vector<pair<int, string>> unnamedFunctions;
@@ -180,10 +181,10 @@ unordered_set<string> BCVerifier::analyzeVerifierErrorsWithLog(const string& ver
 
         string originalName = func->getName().str();
         nameToFunc[originalName] = func;
-        /// 使用FunctionInfo判断是否为无名函数
-        FunctionInfo tempInfo(func);
-        if (tempInfo.isUnnamed()) {
-            int seqNum = tempInfo.sequenceNumber;
+
+        // 只记录无名函数的序号映射
+        if (functionMap.count(func) && functionMap[func].isUnnamed()) {
+            int seqNum = functionMap[func].sequenceNumber;
             if (seqNum >= 0) {
                 sequenceToFunc[seqNum] = func;
                 // 记录无名函数信息
@@ -193,8 +194,8 @@ unordered_set<string> BCVerifier::analyzeVerifierErrorsWithLog(const string& ver
         }
 
         // 记录函数信息
-        std::string seqInfo = tempInfo.isUnnamed() ?
-                            " [序号: " + std::to_string(tempInfo.sequenceNumber) + "]" :
+        std::string seqInfo = functionMap[func].isUnnamed() ?
+                            " [序号: " + std::to_string(functionMap[func].sequenceNumber) + "]" :
                             " [有名函数]";
         logger.logToIndividualLog(individualLog, "组内函数: " + originalName +
                         seqInfo +
