@@ -563,37 +563,107 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getHighInDegreeWithOutDegr
 bool BCModuleSplitter::createGlobalVariablesBCFile(const unordered_set<GlobalVariable*>& globals, const string& filename) {
     logger.logToFile("创建全局变量BC文件: " + filename);
 
-    LLVMContext newContext;
-    llvm::Module* module = common.getModule();
-    auto newModule = make_unique<Module>("global_variables", newContext);
+    Module* origModule = common.getModule();
 
-    // 复制原始模块的基本属性
-    newModule->setTargetTriple(module->getTargetTriple());
-    newModule->setDataLayout(module->getDataLayout());
+    // 1. 使用 CloneModule 克隆整个原始模块（保持所有属性）
+    ValueToValueMapTy VMap;
+    unique_ptr<Module> newModule = CloneModule(*origModule, VMap);
 
-    // 复制全局变量 - 使用声明而非定义
-    for (GlobalVariable* origGlobal : globals) {
-        if (!origGlobal) continue;
+    // 2. 构建新模块中需要保留的全局变量集合
+    unordered_set<GlobalVariable*> clonedGlobalsToKeep;
+    for (GlobalVariable* origGV : globals) {
+        if (!origGV) continue;
 
-        // 对于全局变量，我们创建外部声明而不是定义
-        // 这样可以避免链接属性问题
-        GlobalVariable* newGlobal = new GlobalVariable(
-            *newModule,
-            origGlobal->getValueType(),
-            false, // 设为非常量，避免初始化问题
-            GlobalValue::ExternalLinkage, // 使用外部链接
-            nullptr, // 没有初始值
-            origGlobal->getName(),
-            nullptr,
-            GlobalVariable::NotThreadLocal,
-            origGlobal->getAddressSpace()
-        );
-
-        // 设置可见性
-        newGlobal->setVisibility(origGlobal->getVisibility());
-
-        logger.logToFile("复制全局变量声明: " + origGlobal->getName().str());
+        // 通过 VMap 查找克隆后的对应全局变量
+        Value* clonedVal = VMap[origGV];
+        if (auto* clonedGV = dyn_cast_or_null<GlobalVariable>(clonedVal)) {
+            clonedGlobalsToKeep.insert(clonedGV);
+            logger.logToFile("将保留全局变量: " + origGV->getName().str());
+        } else {
+            logger.logToFile("警告: 全局变量未成功克隆: " + origGV->getName().str());
+        }
     }
+
+    // 3. 清理新模块：删除不需要保留的全局变量
+    std::vector<GlobalVariable*> globalsToProcess;
+    for (GlobalVariable& GV : newModule->globals()) {
+        globalsToProcess.push_back(&GV);
+    }
+
+    for (GlobalVariable* GV : globalsToProcess) {
+        // 检查是否需要保留
+        if (clonedGlobalsToKeep.find(GV) != clonedGlobalsToKeep.end()) {
+            // 对于需要保留的全局变量，检查是否是LLVM内建变量
+            StringRef name = GV->getName();
+            if (name.starts_with("llvm.")) {
+                // LLVM内建全局变量，保持原样
+                logger.logToFile("保留LLVM内建全局变量（保持原样）: " + name.str());
+                continue;
+            } else {
+                GV->setLinkage(GlobalValue::ExternalLinkage);
+                GV->setVisibility(GlobalValue::DefaultVisibility);
+            }
+            continue; // 保留
+        }
+
+        // 不保留的全局变量：如果未被引用，直接删除；否则转为外部声明
+        if (GV->use_empty()) {
+            logger.logToFile("删除未使用全局变量: " + GV->getName().str());
+            GV->eraseFromParent();
+        } else {
+            logger.logToFile("全局变量仍有引用，转为声明: " + GV->getName().str());
+            // 转为外部声明（移除初始值，设为外部链接）
+            GV->setInitializer(nullptr);
+            GV->setLinkage(GlobalValue::ExternalLinkage);
+            GV->setVisibility(GlobalValue::DefaultVisibility);
+        }
+    }
+
+    // 4. 清理函数（全部删除或转为声明）
+    std::vector<Function*> functionsToProcess;
+    for (Function& F : *newModule) {
+        functionsToProcess.push_back(&F);
+    }
+
+    for (Function* F : functionsToProcess) {
+        // 根据需求选择：全部删除或转为声明
+        if (F->use_empty()) {
+            F->eraseFromParent(); // 无引用，直接删除
+        } else {
+            // 有引用，转为声明（保留函数签名供可能的外部引用）
+            F->deleteBody();
+            F->setLinkage(GlobalValue::ExternalLinkage);
+            logger.logToFile("函数转为声明: " + F->getName().str());
+        }
+    }
+
+    // 5. 清理其他可能的内容（别名、IFunc等）
+    // 删除全局别名（GlobalAlias）
+    std::vector<GlobalAlias*> aliasesToRemove;
+    for (GlobalAlias& GA : newModule->aliases()) {
+        aliasesToRemove.push_back(&GA);
+    }
+    for (GlobalAlias* GA : aliasesToRemove) {
+        GA->eraseFromParent();
+    }
+
+    // 删除IFunc（间接函数）
+    std::vector<GlobalIFunc*> ifuncsToRemove;
+    for (GlobalIFunc& GIF : newModule->ifuncs()) {
+        ifuncsToRemove.push_back(&GIF);
+    }
+    for (GlobalIFunc* GIF : ifuncsToRemove) {
+        GIF->eraseFromParent();
+    }
+
+    // 6. 验证并记录PIC级别（CloneModule已自动复制）
+    logger.logToFile("模块克隆完成，包含 " +
+                     to_string(clonedGlobalsToKeep.size()) +
+                     " 个全局变量，PIC级别: " +
+                     to_string(static_cast<int>(newModule->getPICLevel())));
+
+    // 7. 设置模块标识符并写入文件
+    newModule->setModuleIdentifier("global_variables");
 
     return common.writeBitcodeSafely(*newModule, filename);
 }
@@ -1212,6 +1282,8 @@ void BCModuleSplitter::processClonedModuleFunctions(Module& clonedModule, const 
                 func->deleteBody();
                 func->setLinkage(GlobalValue::ExternalLinkage);
                 func->setVisibility(GlobalValue::DefaultVisibility);
+                // 清除dso_local属性
+                func->setDSOLocal(false);
                 logger.logToFile("非目标函数转为声明: " + funcName);
             }
         }
@@ -1221,6 +1293,7 @@ void BCModuleSplitter::processClonedModuleFunctions(Module& clonedModule, const 
 // 新增：处理克隆模块中的全局变量
 void BCModuleSplitter::processClonedModuleGlobals(Module& clonedModule) {
     for (GlobalVariable& global : clonedModule.globals()) {
+        global.setDSOLocal(false);
         // 移除初始值，转为外部声明
         if (global.hasInitializer()) {
             global.setInitializer(nullptr);
