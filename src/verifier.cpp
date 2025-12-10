@@ -199,8 +199,8 @@ unordered_set<string> BCVerifier::analyzeVerifierErrorsWithLog(const string& ver
                             " [有名函数]";
         logger.logToIndividualLog(individualLog, "组内函数: " + originalName +
                         seqInfo +
-                        " [链接: " + getLinkageString(func->getLinkage()) +
-                        ", 可见性: " + getVisibilityString(func->getVisibility()) + "]");
+                        " [链接: " + functionMap[func].getLinkageString() +
+                        ", 可见性: " + functionMap[func].getVisibilityString() + "]");
 
         // 转义序列处理
         if (originalName.find("§") != string::npos) {
@@ -415,8 +415,8 @@ unordered_set<string> BCVerifier::analyzeVerifierErrorsWithLog(const string& ver
                                 ", 序号: " + to_string(functionMap[func].sequenceNumber) :
                                 ", 有名函数";
                 logger.logToIndividualLog(individualLog, "  " + funcName +
-                        " [当前链接: " + getLinkageString(func->getLinkage()) +
-                        ", 可见性: " + getVisibilityString(func->getVisibility()) + seqInfo + "]");
+                        " [当前链接: " + functionMap[func].getLinkageString() +
+                        ", 可见性: " + functionMap[func].getVisibilityString() + seqInfo + "]");
             }
         }
     }
@@ -585,6 +585,29 @@ void BCVerifier::validateAllBCFiles(const string& outputPrefix, bool isCloneMode
         individualLog.close();
     }
 
+    // 检查外部链接函数组
+    string externalFilename = outputPrefix + "_group_external.bc";
+    if (sys::fs::exists(externalFilename)) {
+        totalFiles++;
+        ofstream individualLog = logger.createIndividualLogFile(externalFilename, "_validation");
+        if (isCloneMode) {
+            if (quickValidateBCFile(externalFilename)) {
+                logger.logToIndividualLog(individualLog, "✓ Clone模式验证通过", true);
+                validFiles++;
+            } else {
+                logger.logToIndividualLog(individualLog, "✗ Clone模式验证失败", true);
+            }
+        } else {
+            if (quickValidateBCFileWithLog(externalFilename, individualLog)) {
+                logger.logToIndividualLog(individualLog, "✓ 快速验证通过", true);
+                validFiles++;
+            } else {
+                logger.logToIndividualLog(individualLog, "✗ 快速验证失败", true);
+            }
+        }
+        individualLog.close();
+    }
+
     // 检查高入度函数组
     string highInDegreeFilename = outputPrefix + "_group_high_in_degree.bc";
     if (sys::fs::exists(highInDegreeFilename)) {
@@ -631,8 +654,8 @@ void BCVerifier::validateAllBCFiles(const string& outputPrefix, bool isCloneMode
         individualLog.close();
     }
 
-    // 检查新的分组范围（组3-8）
-    for (int i = 3; i <= 8; i++) {
+    // 检查新的分组范围（组4-9）
+    for (int i = 4; i <= 9; i++) {
         string filename = outputPrefix + "_group_" + to_string(i) + ".bc";
 
         if (!sys::fs::exists(filename)) {
@@ -835,8 +858,8 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const unordered_set<Function*
                             "无名函数 [序号: " + to_string(functionMap[origFunc].sequenceNumber) + "]" :
                             "有名函数";
         logger.logToFile("创建" + funcTypeInfo + ": " + funcName +
-                " [链接: " + getLinkageString(origFunc->getLinkage()) +
-                ", 可见性: " + getVisibilityString(origFunc->getVisibility()) + "]");
+                " [链接: " + functionMap[origFunc].getLinkageString() +
+                ", 可见性: " + functionMap[origFunc].getVisibilityString() + "]");
     }
 
     // 使用专门的无名函数修复方法

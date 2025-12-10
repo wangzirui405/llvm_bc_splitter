@@ -58,6 +58,7 @@ public:
     void generateGroupReport(const std::string& outputPrefix);
 
     // 分组获取功能
+    std::vector<llvm::Function*> getUnprocessedExternalFunctions();
     std::vector<llvm::Function*> getHighInDegreeFunctions(int threshold = 500);
     std::vector<llvm::Function*> getIsolatedFunctions();
     std::unordered_set<llvm::GlobalVariable*> getGlobalVariables();
@@ -69,10 +70,6 @@ public:
     // BC文件创建
     bool createGlobalVariablesBCFile(const std::unordered_set<llvm::GlobalVariable*>& globals,
                                    const std::string& filename);
-    bool createHighInDegreeBCFile(const std::unordered_set<llvm::Function*>& highInDegreeFuncs,
-                                const std::string& filename);
-    bool createIsolatedFunctionsBCFile(const std::unordered_set<llvm::Function*>& isolatedFuncs,
-                                     const std::string& filename);
     bool createBCFile(const std::unordered_set<llvm::Function*>& group,
                      const std::string& filename,
                      int groupIndex);

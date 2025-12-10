@@ -99,6 +99,7 @@ void BCModuleSplitter::analyzeFunctions() {
         std::string funcName = func.getName().str();
         FunctionInfo tempInfo(&func);  // 临时对象用于判断是否为无名函数
         bool isUnnamed = tempInfo.isUnnamed();
+        tempInfo.updateAttributesFromLLVM();
 
         // 只有无名函数才分配序号
         int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
@@ -156,7 +157,9 @@ void BCModuleSplitter::printFunctionInfo() {
         logger.logToFile("函数: " + info.displayName +
             seqInfo +
             " [出度: " + std::to_string(info.outDegree) +
-            ", 入度: " + std::to_string(info.inDegree) + "]" + groupInfo);
+            ", 入度: " + std::to_string(info.inDegree) +
+            ", 链接: " + info.getLinkageString() +
+            ", 可见性: " + info.getVisibilityString() + "]" + groupInfo);
     }
 }
 
@@ -202,16 +205,14 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
     int globalCount = 0;
     for (GlobalVariable* global : globals) {
         if (global) {
-            report << "  " << to_string(++globalCount) << ". " << global->getName().str()
-                    << " [链接: " << getLinkageString(global->getLinkage())
-                    << ", 可见性: " << getVisibilityString(global->getVisibility()) << "]" << endl;
+            report << "  " << to_string(++globalCount) << ". " << global->getName().str() << endl;
         }
     }
     report << "总计: " << globalCount << " 个全局变量" << endl << endl;
 
-    // 高入度函数组（组1）
+    // 外部链接函数组（组1）
     if (groupFunctions.count(1)) {
-        report << "组 1 (高入度函数):" << endl;
+        report << "组 1 (外部链接函数组):" << endl;
         int count = 0;
         for (const string& funcName : groupFunctions[1]) {
             report << "  " << to_string(++count) << ". " << funcName << endl;
@@ -219,9 +220,9 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
         report << "总计: " << groupFunctions[1].size() << " 个函数" << endl << endl;
     }
 
-    // 孤立函数组（组2）
+    // 高入度函数组（组2）
     if (groupFunctions.count(2)) {
-        report << "组 2 (孤立函数):" << endl;
+        report << "组 2 (高入度函数):" << endl;
         int count = 0;
         for (const string& funcName : groupFunctions[2]) {
             report << "  " << to_string(++count) << ". " << funcName << endl;
@@ -229,7 +230,17 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
         report << "总计: " << groupFunctions[2].size() << " 个函数" << endl << endl;
     }
 
-    // 新的分组策略（组3-8）
+    // 孤立函数组（组3）
+    if (groupFunctions.count(3)) {
+        report << "组 3 (孤立函数):" << endl;
+        int count = 0;
+        for (const string& funcName : groupFunctions[3]) {
+            report << "  " << to_string(++count) << ". " << funcName << endl;
+        }
+        report << "总计: " << groupFunctions[3].size() << " 个函数" << endl << endl;
+    }
+
+    // 新的分组策略（组4-9）
     vector<string> groupDescriptions = {
         "前100个函数",
         "101-400个函数",
@@ -239,9 +250,9 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
         "5001-剩余所有函数"
     };
 
-    for (int i = 3; i <= 8; i++) {
+    for (int i = 4; i <= 9; i++) {
         if (groupFunctions.count(i)) {
-            report << "组 " << i << " (" << groupDescriptions[i-3] << "):" << endl;
+            report << "组 " << i << " (" << groupDescriptions[i-4] << "):" << endl;
             int count = 0;
             for (const string& funcName : groupFunctions[i]) {
                 report << "  " << to_string(++count) << ". " << funcName << endl;
@@ -272,12 +283,13 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
     // 定义所有可能的BC文件组
     vector<pair<string, int>> bcFiles = {
         {"_group_globals.bc", 0},
-        {"_group_high_in_degree.bc", 1},
-        {"_group_isolated.bc", 2}
+        {"_group_external.bc", 1},
+        {"_group_high_in_degree.bc", 2},
+        {"_group_isolated.bc", 3}
     };
 
-    // 添加组3-8
-    for (int i = 3; i <= 8; i++) {
+    // 添加组4-9
+    for (int i = 4; i <= 9; i++) {
         bcFiles.emplace_back("_group_" + to_string(i) + ".bc", i);
     }
 
@@ -334,15 +346,18 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
             report << "  总计: " << globalVarCount << " 个全局变量" << endl;
         }
 
-        // 分析函数（对组1-8）
+        // 分析函数（对组1-9）
         if (groupIndex >= 1) {
             report << "  函数分析:" << endl;
             for (auto& func : *testModule) {
-                totalFuncs++;
-                report << "    " << totalFuncs << ". " << func.getName().str()
+
+                if (!func.isDeclaration()) {
+                    totalFuncs++;
+                    report << "    " << totalFuncs << ". " << func.getName().str()
                        << " [链接: " << getLinkageString(func.getLinkage())
                        << ", 可见性: " << getVisibilityString(func.getVisibility())
                        << (func.isDeclaration() ? ", 声明" : ", 定义") << "]" << endl;
+                }
 
                 // 统计链接属性
                 if (func.getLinkage() == GlobalValue::ExternalLinkage) externalLinkageCount++;
@@ -415,6 +430,24 @@ void BCModuleSplitter::generateGroupReport(const string& outputPrefix) {
     for (const auto& file : existingFiles) {
         logger.log("  - " + file);
     }
+}
+
+std::vector<llvm::Function*> BCModuleSplitter::getUnprocessedExternalFunctions() {
+    std::vector<llvm::Function*> externalFuncs;
+    auto& functionMap = common.getFunctionMap();
+
+    for (const auto& pair : functionMap) {
+        const FunctionInfo& funcInfo = pair.second;
+
+        // 检查条件：链接属性为 EXTERNAL_LINKAGE 且未被处理
+        if (funcInfo.linkage == EXTERNAL_LINKAGE && !funcInfo.isProcessed) {
+            externalFuncs.push_back(pair.first);
+        }
+    }
+
+    logger.log("找到 " + std::to_string(externalFuncs.size()) +
+               " 个未处理的外部链接函数 (ExternalLinkage)");
+    return externalFuncs;
 }
 
 std::vector<llvm::Function*> BCModuleSplitter::getHighInDegreeFunctions(int threshold) {
@@ -532,7 +565,7 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getHighInDegreeWithOutDegr
     }
 
     if (toProcess.empty()) {
-        logger.logToFile("已无需进行扩展，均已记录，总数为: " + std::to_string(highInDegreeFuncs.size()));
+        //logger.logToFile("已无需进行扩展，均已记录，总数为: " + std::to_string(highInDegreeFuncs.size()));
         return highInDegreeFuncs;
     }
 
@@ -550,8 +583,8 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getHighInDegreeWithOutDegr
             if (completeSet.find(called) == completeSet.end()) {
                 completeSet.insert(called);
                 toProcess.push(called);
-                logger.logToFile("  添加出度函数: " + functionMap[called].displayName +
-                             " [被 " + functionMap[current].displayName + " 调用]");
+                //logger.logToFile("  添加出度函数: " + functionMap[called].displayName +
+                //             " [被 " + functionMap[current].displayName + " 调用]");
             }
         }
     }
@@ -578,7 +611,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const unordered_set<GlobalVar
         Value* clonedVal = VMap[origGV];
         if (auto* clonedGV = dyn_cast_or_null<GlobalVariable>(clonedVal)) {
             clonedGlobalsToKeep.insert(clonedGV);
-            logger.logToFile("将保留全局变量: " + origGV->getName().str());
+            //logger.logToFile("将保留全局变量: " + origGV->getName().str());
         } else {
             logger.logToFile("警告: 全局变量未成功克隆: " + origGV->getName().str());
         }
@@ -633,7 +666,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const unordered_set<GlobalVar
             // 有引用，转为声明（保留函数签名供可能的外部引用）
             F->deleteBody();
             F->setLinkage(GlobalValue::ExternalLinkage);
-            logger.logToFile("函数转为声明: " + F->getName().str());
+            //logger.logToFile("函数转为声明: " + F->getName().str());
         }
     }
 
@@ -664,185 +697,6 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const unordered_set<GlobalVar
 
     // 7. 设置模块标识符并写入文件
     newModule->setModuleIdentifier("global_variables");
-
-    return common.writeBitcodeSafely(*newModule, filename);
-}
-
-// 创建高入度函数组BC文件（包含完整的出度链）
-bool BCModuleSplitter::createHighInDegreeBCFile(const unordered_set<Function*>& highInDegreeFuncs, const string& filename) {
-    logger.logToFile("创建高入度函数BC文件: " + filename + " (包含完整出度链)");
-
-    // 首先获取完整的高入度函数组（包含所有出度函数）
-    unordered_set<Function*> completeHighInDegreeSet = getHighInDegreeWithOutDegreeFunctions(highInDegreeFuncs);
-
-    LLVMContext newContext;
-    llvm::Module* module = common.getModule();
-    auto& functionMap = common.getFunctionMap();
-    auto newModule = make_unique<Module>("high_in_degree_functions", newContext);
-
-    // 复制原始模块的基本属性
-    newModule->setTargetTriple(module->getTargetTriple());
-    newModule->setDataLayout(module->getDataLayout());
-
-    // 复制高入度函数签名（包括所有出度函数）
-    for (Function* origFunc : completeHighInDegreeSet) {
-        if (!origFunc) continue;
-
-        // 创建函数类型
-        vector<Type*> paramTypes;
-        for (const auto& arg : origFunc->args()) {
-            Type* argType = arg.getType();
-
-            if (argType->isIntegerTy()) {
-                paramTypes.push_back(Type::getIntNTy(newContext, argType->getIntegerBitWidth()));
-            } else if (argType->isPointerTy()) {
-                PointerType* ptrType = cast<PointerType>(argType);
-                unsigned addressSpace = ptrType->getAddressSpace();
-                paramTypes.push_back(PointerType::get(newContext, addressSpace));
-            } else if (argType->isVoidTy()) {
-                paramTypes.push_back(Type::getVoidTy(newContext));
-            } else if (argType->isFloatTy()) {
-                paramTypes.push_back(Type::getFloatTy(newContext));
-            } else if (argType->isDoubleTy()) {
-                paramTypes.push_back(Type::getDoubleTy(newContext));
-            } else {
-                paramTypes.push_back(PointerType::get(newContext, 0));
-            }
-        }
-
-        // 确定返回类型
-        Type* returnType = origFunc->getReturnType();
-        Type* newReturnType;
-
-        if (returnType->isIntegerTy()) {
-            newReturnType = Type::getIntNTy(newContext, returnType->getIntegerBitWidth());
-        } else if (returnType->isPointerTy()) {
-            PointerType* ptrType = cast<PointerType>(returnType);
-            unsigned addressSpace = ptrType->getAddressSpace();
-            newReturnType = PointerType::get(newContext, addressSpace);
-        } else if (returnType->isVoidTy()) {
-            newReturnType = Type::getVoidTy(newContext);
-        } else if (returnType->isFloatTy()) {
-            newReturnType = Type::getFloatTy(newContext);
-        } else if (returnType->isDoubleTy()) {
-            newReturnType = Type::getDoubleTy(newContext);
-        } else {
-            newReturnType = PointerType::get(newContext, 0);
-        }
-
-        FunctionType* funcType = FunctionType::get(newReturnType, paramTypes, origFunc->isVarArg());
-
-        Function* newFunc = Function::Create(
-            funcType,
-            origFunc->getLinkage(),
-            origFunc->getName(),
-            newModule.get()
-        );
-
-        newFunc->setCallingConv(origFunc->getCallingConv());
-        newFunc->setVisibility(origFunc->getVisibility());
-        newFunc->setDLLStorageClass(origFunc->getDLLStorageClass());
-
-        // 标记函数已处理
-        if (functionMap.count(origFunc)) {
-            functionMap[origFunc].groupIndex = 1; // 高入度函数组编号为1
-            functionMap[origFunc].isProcessed = true;
-        }
-
-        // 记录函数类型（高入度函数或出度函数）
-        string funcTypeStr = (highInDegreeFuncs.find(origFunc) != highInDegreeFuncs.end()) ?
-            "高入度函数" : "出度函数";
-
-        logger.logToFile("复制" + funcTypeStr + ": " + origFunc->getName().str() +
-                    " [入度: " + to_string(functionMap[origFunc].inDegree) +
-                    ", 出度: " + to_string(functionMap[origFunc].outDegree) +
-                    ", 链接: " + getLinkageString(origFunc->getLinkage()) + "]");
-    }
-
-    return common.writeBitcodeSafely(*newModule, filename);
-}
-
-// 创建孤立函数组BC文件
-bool BCModuleSplitter::createIsolatedFunctionsBCFile(const unordered_set<Function*>& isolatedFuncs, const string& filename) {
-    logger.logToFile("创建孤立函数BC文件: " + filename);
-
-    LLVMContext newContext;
-    llvm::Module* module = common.getModule();
-    auto& functionMap = common.getFunctionMap();
-    auto newModule = make_unique<Module>("isolated_functions", newContext);
-
-    // 复制原始模块的基本属性
-    newModule->setTargetTriple(module->getTargetTriple());
-    newModule->setDataLayout(module->getDataLayout());
-
-    // 复制孤立函数签名
-    for (Function* origFunc : isolatedFuncs) {
-        if (!origFunc) continue;
-
-        // 创建函数类型
-        vector<Type*> paramTypes;
-        for (const auto& arg : origFunc->args()) {
-            Type* argType = arg.getType();
-
-            if (argType->isIntegerTy()) {
-                paramTypes.push_back(Type::getIntNTy(newContext, argType->getIntegerBitWidth()));
-            } else if (argType->isPointerTy()) {
-                PointerType* ptrType = cast<PointerType>(argType);
-                unsigned addressSpace = ptrType->getAddressSpace();
-                paramTypes.push_back(PointerType::get(newContext, addressSpace));
-            } else if (argType->isVoidTy()) {
-                paramTypes.push_back(Type::getVoidTy(newContext));
-            } else if (argType->isFloatTy()) {
-                paramTypes.push_back(Type::getFloatTy(newContext));
-            } else if (argType->isDoubleTy()) {
-                paramTypes.push_back(Type::getDoubleTy(newContext));
-            } else {
-                paramTypes.push_back(PointerType::get(newContext, 0));
-            }
-        }
-
-        // 确定返回类型
-        Type* returnType = origFunc->getReturnType();
-        Type* newReturnType;
-
-        if (returnType->isIntegerTy()) {
-            newReturnType = Type::getIntNTy(newContext, returnType->getIntegerBitWidth());
-        } else if (returnType->isPointerTy()) {
-            PointerType* ptrType = cast<PointerType>(returnType);
-            unsigned addressSpace = ptrType->getAddressSpace();
-            newReturnType = PointerType::get(newContext, addressSpace);
-        } else if (returnType->isVoidTy()) {
-            newReturnType = Type::getVoidTy(newContext);
-        } else if (returnType->isFloatTy()) {
-            newReturnType = Type::getFloatTy(newContext);
-        } else if (returnType->isDoubleTy()) {
-            newReturnType = Type::getDoubleTy(newContext);
-        } else {
-            newReturnType = PointerType::get(newContext, 0);
-        }
-
-        FunctionType* funcType = FunctionType::get(newReturnType, paramTypes, origFunc->isVarArg());
-
-        Function* newFunc = Function::Create(
-            funcType,
-            origFunc->getLinkage(),
-            origFunc->getName(),
-            newModule.get()
-        );
-
-        newFunc->setCallingConv(origFunc->getCallingConv());
-        newFunc->setVisibility(origFunc->getVisibility());
-        newFunc->setDLLStorageClass(origFunc->getDLLStorageClass());
-
-        // 标记函数已处理
-        if (functionMap.count(origFunc)) {
-            functionMap[origFunc].groupIndex = 2; // 孤立函数组编号为2
-            functionMap[origFunc].isProcessed = true;
-        }
-
-        logger.logToFile("复制孤立函数: " + origFunc->getName().str() +
-                    " [出度=0, 入度=0, 链接: " + getLinkageString(origFunc->getLinkage()) + "]");
-    }
 
     return common.writeBitcodeSafely(*newModule, filename);
 }
@@ -878,16 +732,73 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
         }
     }
 
-    // 步骤2: 处理高入度函数组（包含完整的出度链）
+    // 步骤2: 处理外部链接函数组
+    vector<Function*> externalFuncs = getUnprocessedExternalFunctions();
+
+    if (!externalFuncs.empty()) {
+        unordered_set<Function*> externalSet(externalFuncs.begin(), externalFuncs.end());
+        string filename = outputPrefix + "_group_external.bc";
+
+        if (createBCFile(externalSet, filename, 1)) {
+            bool verified = false;
+            if (BCModuleSplitter::currentMode == CLONE_MODE) {
+                if (quickValidateBCFile(filename)) {
+                    verified = true;
+                    logger.log("✓ Clone模式外部链接函数BC文件验证通过: " + filename);
+                }
+            } else {
+                if (verifyAndFixBCFile(filename, externalSet)) {
+                    verified = true;
+                    logger.log("✓ 外部链接函数BC文件验证通过: " + filename);
+                }
+            }
+
+            if (verified) {
+                // 显示外部链接函数组的详细信息 - 完整打印
+                logger.log("外部链接函数组详情:");
+                int externalCount = 0;
+
+                // 首先打印外部链接函数
+                logger.log("=== 外部链接函数列表 ===");
+                for (Function* func : externalSet) {
+                    if (externalSet.find(func) != externalSet.end()) {
+                        const FunctionInfo& info = functionMap[func];
+                        string funcType = info.isUnnamed() ?
+                            "无名函数 [序号:" + to_string(info.sequenceNumber) + "]" :
+                            "有名函数";
+
+                        logger.log("  外部链接函数: " + info.displayName +
+                            " [" + funcType +
+                            ", 入度: " + to_string(info.inDegree) +
+                            ", 出度: " + to_string(info.outDegree) +
+                            ", 链接: " + info.getLinkageString() +
+                            ", 可见性: " + info.getVisibilityString() +
+                            ", DSO本地: " + (info.dsoLocal ? "是" : "否") + "]");
+                        externalCount++;
+                    }
+                }
+
+                logger.log("统计: 外部链接函数: " + to_string(externalCount) + " 个");
+                logger.log("统计: 总计: " + to_string(externalFuncs.size()) + " 个函数");
+            } else {
+                logger.logError("✗ 外部链接函数BC文件验证失败: " + filename);
+            }
+            fileCount++;
+        } else {
+            logger.logError("✗ 创建外部链接函数BC文件失败: " + filename);
+        }
+    } else {
+        logger.log("没有找到未处理的外部链接函数");
+    }
+
+    // 步骤3: 处理高入度函数组（包含完整的出度链）
     vector<Function*> highInDegreeFuncs = getHighInDegreeFunctions(500);
 
     if (!highInDegreeFuncs.empty()) {
         unordered_set<Function*> highInDegreeSet(highInDegreeFuncs.begin(), highInDegreeFuncs.end());
         string filename = outputPrefix + "_group_high_in_degree.bc";
-
-        if (createBCFile(highInDegreeSet, filename, 1)) {
-            unordered_set<Function*> completeHighInDegreeSet = getHighInDegreeWithOutDegreeFunctions(highInDegreeSet);
-
+        unordered_set<Function*> completeHighInDegreeSet = getHighInDegreeWithOutDegreeFunctions(highInDegreeSet);
+        if (createBCFile(completeHighInDegreeSet, filename, 2)) {
             bool verified = false;
             if (BCModuleSplitter::currentMode == CLONE_MODE) {
                 if (quickValidateBCFile(filename)) {
@@ -919,7 +830,8 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
                             " [" + funcType +
                             ", 入度: " + to_string(info.inDegree) +
                             ", 出度: " + to_string(info.outDegree) +
-                            ", 链接: " + getLinkageString(func->getLinkage()) + "]");
+                            ", 链接: " + info.getLinkageString() +
+                            ", 可见性" + info.getVisibilityString() + "]");
                         highInDegreeCount++;
                     }
                 }
@@ -936,7 +848,8 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
                             " [" + funcType +
                             ", 入度: " + to_string(info.inDegree) +
                             ", 出度: " + to_string(info.outDegree) +
-                            ", 链接: " + getLinkageString(func->getLinkage()) + "]");
+                            ", 链接: " + info.getLinkageString() +
+                            ", 可见性" + info.getVisibilityString() + "]");
                         outDegreeCount++;
                     }
                 }
@@ -951,14 +864,14 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
         }
     }
 
-    // 步骤3: 处理孤立函数组（出度=0且入度=0）
+    // 步骤4: 处理孤立函数组（出度=0且入度=0）
     vector<Function*> isolatedFuncs = getIsolatedFunctions();
 
     if (!isolatedFuncs.empty()) {
         unordered_set<Function*> isolatedSet(isolatedFuncs.begin(), isolatedFuncs.end());
         string filename = outputPrefix + "_group_isolated.bc";
 
-        if (createBCFile(isolatedSet, filename, 2)) {
+        if (createBCFile(isolatedSet, filename, 3)) {
             bool verified = false;
             if (BCModuleSplitter::currentMode == CLONE_MODE) {
                 if (quickValidateBCFile(filename)) {
@@ -985,7 +898,7 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
                         " [" + funcType +
                         ", 入度: " + to_string(info.inDegree) +
                         ", 出度: " + to_string(info.outDegree) +
-                        ", 链接: " + getLinkageString(func->getLinkage()) + "]");
+                        ", 链接: " + info.getLinkageString() + "]");
                     isolatedCount++;
                 }
                 logger.log("统计: 总计: " + to_string(isolatedCount) + " 个孤立函数");
@@ -1014,7 +927,7 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
         {5000, -1}     // 第8组: 5001-剩余所有
     };
 
-    int groupIndex = 3; // 从组3开始
+    int groupIndex = 4; // 从组3开始
 
     for (const auto& range : groupRanges) {
         int start = range.first;
@@ -1064,7 +977,8 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
                         ", 入度: " + to_string(info.inDegree) +
                         ", 出度: " + to_string(info.outDegree) +
                         ", 总分: " + to_string(info.inDegree + info.outDegree) +
-                        ", 链接: " + getLinkageString(f->getLinkage()) + "]");
+                        ", 链接: " + info.getLinkageString() +
+                        ", 可见性" + info.getVisibilityString() + "]");
                 }
                 logger.log("组 " + to_string(groupIndex) + " 统计: 共 " + to_string(group.size()) + " 个函数");
             } else {
@@ -1111,7 +1025,7 @@ void BCModuleSplitter::splitBCFiles(const string& outputPrefix) {
                     ", 出度: " + to_string(info.outDegree) +
                     ", 入度: " + to_string(info.inDegree) +
                     ", 总分: " + to_string(info.outDegree + info.inDegree) +
-                    ", 链接: " + (info.funcPtr ? getLinkageString(info.funcPtr->getLinkage()) : "N/A") + "]");
+                    ", 链接: " + (info.funcPtr ? info.getLinkageString() : "N/A") + "]");
             }
         }
         logger.log("未处理函数统计: 共 " + to_string(unprocessedCount) + " 个函数");
@@ -1202,8 +1116,8 @@ bool BCModuleSplitter::createBCFileWithSignatures(const unordered_set<Function*>
         }
 
         logger.logToFile("复制函数: " + origFunc->getName().str() +
-                    " [链接: " + getLinkageString(origFunc->getLinkage()) +
-                    ", 可见性: " + getVisibilityString(origFunc->getVisibility()) + "]");
+                    " [链接: " + functionMap[origFunc].getLinkageString() +
+                    ", 可见性: " + functionMap[origFunc].getVisibilityString() + "]");
     }
 
     // 写入bitcode
@@ -1284,7 +1198,7 @@ void BCModuleSplitter::processClonedModuleFunctions(Module& clonedModule, const 
                 func->setVisibility(GlobalValue::DefaultVisibility);
                 // 清除dso_local属性
                 func->setDSOLocal(false);
-                logger.logToFile("非目标函数转为声明: " + funcName);
+                //logger.logToFile("非目标函数转为声明: " + funcName);
             }
         }
     }
@@ -1303,7 +1217,7 @@ void BCModuleSplitter::processClonedModuleGlobals(Module& clonedModule) {
         global.setLinkage(GlobalValue::ExternalLinkage);
         global.setVisibility(GlobalValue::DefaultVisibility);
 
-        logger.logToFile("全局变量处理: " + global.getName().str() + " -> External");
+        //logger.logToFile("全局变量处理: " + global.getName().str() + " -> External");
     }
 }
 
