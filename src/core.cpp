@@ -20,8 +20,7 @@ FunctionInfo::FunctionInfo(llvm::Function* func, int seqNum) {
     if (isUnnamedFunc) {
         // 只有无名函数才分配序号
         sequenceNumber = seqNum;
-        displayName = "unnamed_" + std::to_string(seqNum) + "_" +
-                     std::to_string(reinterpret_cast<uintptr_t>(func));
+        displayName = "__unnamed_" + std::to_string(seqNum);
     } else {
         // 有名函数没有序号
         sequenceNumber = -1;
@@ -285,6 +284,46 @@ std::string FunctionInfo::getAttributesSummary() const {
     summary += "\nCommon链接: " + std::string(isCommon ? "是" : "否");
     summary += "\n编译器生成: " + std::string(isCompilerGenerated() ? "是" : "否");
     return summary;
+}
+
+/**
+ * 判断指定函数的调用者是否全部在指定的组中
+ *
+ * @param func 要检查的函数，该函数必须在group和functionMap中
+ * @param group 函数组
+ * @param functionMap 函数信息映射表
+ * @return true 如果func的所有调用者都在group中
+ * @return false 如果func有调用者不在group中
+ * @throws std::invalid_argument 如果func不在group或functionMap中
+ */
+bool FunctionInfo::areAllCallersInGroup(llvm::Function* func,
+                         const std::unordered_set<llvm::Function*>& group,
+                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
+    // 参数检查
+    if (group.find(func) == group.end()) {
+        throw std::invalid_argument("Function must be in the group");
+    }
+
+    auto funcInfoIt = functionMap.find(func);
+    if (funcInfoIt == functionMap.end()) {
+        throw std::invalid_argument("Function must be in functionMap");
+    }
+
+    const auto& callerFunctions = funcInfoIt->second.callerFunctions;
+
+    // 如果函数没有调用者，那么所有调用者（没有）都在group中
+    if (callerFunctions.empty()) {
+        return true;
+    }
+
+    // 检查每个调用者是否都在group中
+    for (llvm::Function* caller : callerFunctions) {
+        if (group.find(caller) == group.end()) {
+            return false;  // 发现一个不在group中的调用者
+        }
+    }
+
+    return true;  // 所有调用者都在group中
 }
 
 void AttributeStats::addFunctionInfo(const FunctionInfo& funcInfo) {

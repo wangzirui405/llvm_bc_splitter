@@ -60,12 +60,6 @@ struct FunctionInfo {
     FunctionInfo() = default;
     FunctionInfo(llvm::Function* func, int seqNum = -1);
 
-    // 辅助函数
-    static bool isNumberString(const std::string& str);
-
-    // 判断是否为无名函数
-    bool isUnnamed() const;
-
     // 获取函数类型描述
     std::string getFunctionType() const;
 
@@ -87,9 +81,6 @@ struct FunctionInfo {
     // 获取属性汇总字符串
     std::string getAttributesSummary() const;
 
-    // 从LLVM函数更新属性
-    void updateAttributesFromLLVM();
-
     // 判断是否需要在拆分时保留
     bool shouldPreserveInSplit() const;
 
@@ -98,6 +89,17 @@ struct FunctionInfo {
 
     // 判断是否是编译器生成的函数
     bool isCompilerGenerated() const;
+
+    // 判断是否为无名函数
+    bool isUnnamed() const;
+    // 从LLVM函数更新属性
+    void updateAttributesFromLLVM();
+    // 辅助函数
+    static bool isNumberString(const std::string& str);
+    // 判断指定函数的调用者是否全部在指定的组中
+    static bool areAllCallersInGroup(llvm::Function* func,
+                         const std::unordered_set<llvm::Function*>& group,
+                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
 };
 
 // 分组模式枚举

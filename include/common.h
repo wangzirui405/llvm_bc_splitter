@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <set>
 #include <string>
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -24,6 +25,10 @@ private:
     std::unique_ptr<llvm::Module> module;
     std::unordered_map<llvm::Function*, FunctionInfo> functionMap;
     llvm::LLVMContext* context;
+    // 存储循环调用组
+    std::vector<std::unordered_set<llvm::Function*>> cyclicGroups;
+    // 函数到所属循环组的映射（一个函数可能属于多个组）
+    std::unordered_map<llvm::Function*, std::vector<int>> functionToGroupMap;
     Logger logger;
 
 public:
@@ -46,6 +51,9 @@ public:
     bool writeBitcodeSafely(llvm::Module& mod, const std::string& filename);
     // 清空数据
     void clear();
+    void findCyclicGroups();
+    std::unordered_set<llvm::Function*> getCyclicGroupsContainingFunction(llvm::Function* func);
+    std::vector<std::set<int>> getGroupDependencies();
 };
 
 #endif // BC_SPLITTER_COMMON_H

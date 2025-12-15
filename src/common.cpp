@@ -47,3 +47,185 @@ bool BCCommon::writeBitcodeSafely(llvm::Module& mod, const std::string& filename
         return false;
     }
 }
+
+/**
+ * @brief 检测并记录所有存在循环调用的函数组
+ *
+ * 使用Tarjan算法查找函数调用图中的强连通分量（SCC）
+ * 强连通分量即存在循环调用的函数组
+ */
+void BCCommon::findCyclicGroups() {
+    cyclicGroups.clear();
+    functionToGroupMap.clear();
+
+    if (functionMap.empty()) {
+        logger.logWarning("Function map is empty, no cyclic groups to find.");
+        return;
+    }
+
+    // 构建调用图
+    std::unordered_map<llvm::Function*, std::unordered_set<llvm::Function*>> callGraph;
+    std::unordered_map<llvm::Function*, int> indices;
+    std::unordered_map<llvm::Function*, int> lowlinks;
+    std::unordered_map<llvm::Function*, bool> onStack;
+    std::stack<llvm::Function*> stack;
+    int index = 0;
+
+    // 初始化调用图
+    for (auto& pair : functionMap) {
+        llvm::Function* func = pair.first;
+        callGraph[func] = std::unordered_set<llvm::Function*>();
+
+        // 添加直接调用关系
+        for (auto calledFunc : pair.second.calledFunctions) {
+            if (functionMap.find(calledFunc) != functionMap.end()) {
+                callGraph[func].insert(calledFunc);
+            }
+        }
+    }
+
+    // Tarjan算法实现
+    std::function<void(llvm::Function*)> strongConnect;
+    strongConnect = [&](llvm::Function* v) {
+        indices[v] = index;
+        lowlinks[v] = index;
+        index++;
+        stack.push(v);
+        onStack[v] = true;
+
+        // 遍历所有邻居（被调用的函数）
+        for (auto w : callGraph[v]) {
+            if (indices.find(w) == indices.end()) {
+                // w未访问过
+                strongConnect(w);
+                lowlinks[v] = std::min(lowlinks[v], lowlinks[w]);
+            } else if (onStack[w]) {
+                // w在栈中，说明找到回边
+                lowlinks[v] = std::min(lowlinks[v], indices[w]);
+            }
+        }
+
+        // 如果v是强连通分量的根
+        if (lowlinks[v] == indices[v]) {
+            std::unordered_set<llvm::Function*> scc;
+            llvm::Function* w;
+            do {
+                w = stack.top();
+                stack.pop();
+                onStack[w] = false;
+                scc.insert(w);
+            } while (w != v);
+
+            // 只记录非平凡的强连通分量（大小>1）
+            if (scc.size() > 1) {
+                cyclicGroups.push_back(scc);
+                int groupIndex = cyclicGroups.size() - 1;
+
+                // 更新函数到组的映射
+                for (auto func : scc) {
+                    functionToGroupMap[func].push_back(groupIndex);
+                }
+
+                //logger.logToFile("Found cyclic group " + std::to_string(groupIndex) +
+                //           " with " + std::to_string(scc.size()) + " functions");
+            }
+        }
+    };
+
+    // 对每个未访问的函数执行算法
+    for (auto& pair : functionMap) {
+        llvm::Function* func = pair.first;
+        if (indices.find(func) == indices.end()) {
+            strongConnect(func);
+        }
+    }
+
+    logger.logToFile("Total cyclic groups found: " + std::to_string(cyclicGroups.size()));
+}
+
+/**
+ * @brief 根据llvm::Function*查询函数所在的循环调用组
+ * @param func 要查询的函数指针
+ * @return 包含该函数的所有循环调用组（每个组是一个函数集合）
+ */
+
+std::unordered_set<llvm::Function*> BCCommon::getCyclicGroupsContainingFunction(llvm::Function* func) {
+    std::vector<std::unordered_set<llvm::Function*>> result;
+    std::unordered_set<llvm::Function*> allRelatedFuncs;
+
+    if (!func) {
+        logger.logWarning("Null function pointer provided to query.");
+        return allRelatedFuncs;
+    }
+
+    auto it = functionToGroupMap.find(func);
+    if (it == functionToGroupMap.end()) {
+        //logger.logToFile("Function " + func->getName().str() + " is not part of any cyclic group.");
+        return allRelatedFuncs;
+    }
+
+    for (int groupIndex : it->second) {
+        if (groupIndex >= 0 && groupIndex < cyclicGroups.size()) {
+            result.push_back(cyclicGroups[groupIndex]);
+        }
+    }
+
+    // 收集所有循环组中的所有函数
+    for (const auto& cycGroup : result) {
+        allRelatedFuncs.insert(cycGroup.begin(), cycGroup.end());
+    }
+
+    return allRelatedFuncs;
+}
+
+/**
+ * @brief 每个group获取函数calledFunctions中所有函数的groupIndex（去重）
+ *
+ * @return std::vector<std::set<int>> 每个group去重后的groupIndex矩阵信息
+ *         如果传入的函数不在functionMap中，返回空矩阵
+ *         如果calledFunctions中的函数不在functionMap中，跳过该函数
+ */
+std::vector<std::set<int>> BCCommon::getGroupDependencies() {
+    auto& functionMap = getFunctionMap();
+
+    // 1. 先找出最大的groupIndex，以便确定vector大小
+    int maxGroupIndex = -1;
+    for (const auto& pair : functionMap) {
+        maxGroupIndex = std::max(maxGroupIndex, pair.second.groupIndex);
+    }
+
+    // 如果没有任何分组，返回空vector
+    if (maxGroupIndex < 0) {
+        return {};
+    }
+
+    // 2. 创建结果vector，大小为maxGroupIndex+1
+    std::vector<std::set<int>> groupDependencies(maxGroupIndex + 1);
+
+    // 3. 遍历所有函数，收集每个函数所属组的依赖
+    for (const auto& pair : functionMap) {
+        const FunctionInfo& funcInfo = pair.second;
+
+        // 跳过未分组的函数
+        if (funcInfo.groupIndex < 0) {
+            continue;
+        }
+
+        // 获取该函数调用的函数所在的组
+        std::set<int> calledGroups;
+        for (llvm::Function* calledFunc : funcInfo.calledFunctions) {
+            auto calledIt = functionMap.find(calledFunc);
+            if (calledIt != functionMap.end()) {
+                int groupIdx = calledIt->second.groupIndex;
+                if (groupIdx >= 0 && groupIdx != funcInfo.groupIndex) {
+                    calledGroups.insert(groupIdx);
+                }
+            }
+        }
+        // 将依赖组添加到结果中
+        groupDependencies[funcInfo.groupIndex].insert(
+            calledGroups.begin(), calledGroups.end());
+    }
+
+    return groupDependencies;
+}

@@ -64,8 +64,10 @@ public:
     std::unordered_set<llvm::GlobalVariable*> getGlobalVariables();
     std::vector<llvm::Function*> getTopFunctions(int topN);
     std::unordered_set<llvm::Function*> getFunctionGroup(llvm::Function* func);
-    std::unordered_set<llvm::Function*> getHighInDegreeWithOutDegreeFunctions(
+    std::unordered_set<llvm::Function*> getOriginWithOutDegreeFunctions(
         const std::unordered_set<llvm::Function*>& highInDegreeFuncs);
+    std::unordered_set<llvm::Function*> getStronglyConnectedComponent(
+        const std::unordered_set<llvm::Function*>& originFuncs);
 
     // BC文件创建
     bool createGlobalVariablesBCFile(const std::unordered_set<llvm::GlobalVariable*>& globals,
@@ -97,7 +99,8 @@ private:
                              int groupIndex);
     // Clone模式处理
     void processClonedModuleFunctions(llvm::Module& clonedModule,
-                                    const std::unordered_set<llvm::Function*>& targetGroup);
+                                    const std::unordered_set<llvm::Function*>& targetGroup,
+                                    const std::unordered_set<llvm::Function*>& externalGroup);
     void processClonedModuleGlobals(llvm::Module& clonedModule);
 
     // 分组策略
