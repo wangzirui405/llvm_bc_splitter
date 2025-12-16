@@ -42,6 +42,7 @@ int main(int argc, char* argv[]) {
         }
 
         splitter.analyzeFunctions();
+        //splitter.analyzeInternalConstants();
         splitter.printFunctionInfo();
         splitter.splitBCFiles(outputPrefix);
 

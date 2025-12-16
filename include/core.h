@@ -16,14 +16,14 @@
 
 // 链接类型枚举（与LLVM对应）
 enum LinkageType {
-    EXTERNAL_LINKAGE = 0,           ///< 外部可见函数
+    EXTERNAL_LINKAGE = 0,           ///< 外部可见
     AVAILABLE_EXTERNALLY_LINKAGE,   ///< 可用于检查，但不发出
     LINK_ONCE_ANY_LINKAGE,          ///< 链接时保留一个副本（内联）
     LINK_ONCE_ODR_LINKAGE,          ///< 相同，但仅被等效内容替换
-    WEAK_ANY_LINKAGE,               ///< 链接时保留一个命名函数副本（弱）
+    WEAK_ANY_LINKAGE,               ///< 链接时保留一个命名副本（弱）
     WEAK_ODR_LINKAGE,               ///< 相同，但仅被等效内容替换
     APPENDING_LINKAGE,              ///< 特殊用途，仅适用于全局数组
-    INTERNAL_LINKAGE,               ///< 链接时重命名冲突（静态函数）
+    INTERNAL_LINKAGE,               ///< 链接时重命名冲突（静态）
     PRIVATE_LINKAGE,                ///< 类似于内部链接，但从符号表中省略
     EXTERNAL_WEAK_LINKAGE,          ///< 外部弱链接
     COMMON_LINKAGE                  ///< 暂定定义
@@ -38,6 +38,7 @@ struct FunctionInfo {
     int inDegree = 0;
     int groupIndex = -1;
     bool isProcessed = false;
+    bool isReferencedByGlobals = false;
     int sequenceNumber = -1;  // 只有无名函数才有序号，有名函数为-1
 
     // 新增的属性
@@ -81,25 +82,76 @@ struct FunctionInfo {
     // 获取属性汇总字符串
     std::string getAttributesSummary() const;
 
-    // 判断是否需要在拆分时保留
-    bool shouldPreserveInSplit() const;
-
-    // 判断是否可以安全删除
-    bool canBeSafelyRemoved() const;
-
     // 判断是否是编译器生成的函数
     bool isCompilerGenerated() const;
-
     // 判断是否为无名函数
     bool isUnnamed() const;
     // 从LLVM函数更新属性
     void updateAttributesFromLLVM();
-    // 辅助函数
-    static bool isNumberString(const std::string& str);
     // 判断指定函数的调用者是否全部在指定的组中
     static bool areAllCallersInGroup(llvm::Function* func,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
+};
+
+// 全局变量信息结构体
+struct GlobalVariableInfo {
+    std::string name;
+    std::string displayName;
+    llvm::GlobalVariable* gvPtr = nullptr;
+    int groupIndex = -1;
+    bool isProcessed = false;
+    int sequenceNumber = -1;  // 只有无名全局变量才有序号，有名全局变量为-1
+
+    // 新增的属性
+    LinkageType linkage = EXTERNAL_LINKAGE;  // 链接属性
+    std::string linkageString;               // 链接属性字符串表示
+    bool dsoLocal = false;                   // DSO本地属性
+    std::string visibility;                  // 可见性属性
+    bool isConstant = false;                 // 是否是常量
+    bool isDeclaration = false;              // 是否是声明
+    bool isDefinition = false;               // 是否是定义
+    bool isExternal = false;                 // 是否外部链接
+    bool isInternal = false;                 // 是否内部链接
+    bool isWeak = false;                     // 是否弱链接
+    bool isLinkOnce = false;                 // 是否LinkOnce链接
+    bool isCommon = false;                   // 是否Common链接
+
+    // 全局变量使用信息
+    std::unordered_set<llvm::Function*> calleds;
+    std::unordered_set<llvm::Function*> callers;
+
+    GlobalVariableInfo() = default;
+    GlobalVariableInfo(llvm::GlobalVariable* gvPtr, int seqNum = -1);
+
+    // 获取全局变量类型描述
+    std::string getGlobalVariableType() const;
+
+    // 获取链接属性描述
+    std::string getLinkageString() const;
+
+    // 获取链接类型简写
+    std::string getLinkageAbbreviation() const;
+
+    // 获取可见性描述
+    std::string getVisibilityString() const;
+
+    // 获取完整信息字符串
+    std::string getFullInfo() const;
+
+    // 获取简略信息字符串
+    std::string getBriefInfo() const;
+
+    // 获取属性汇总字符串
+    std::string getAttributesSummary() const;
+
+    // 判断是否是编译器生成的全局变量
+    bool isCompilerGenerated() const;
+    // 判断是否为无名全局变量
+    bool isUnnamed() const;
+    // 从LLVM全局变量更新属性
+    void updateAttributesFromLLVM();
+
 };
 
 // 分组模式枚举

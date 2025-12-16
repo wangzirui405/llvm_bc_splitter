@@ -8,6 +8,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -60,16 +61,17 @@ void BCModuleSplitter::setCloneMode(bool enable) {
 bool BCModuleSplitter::loadBCFile(const std::string& filename) {
     logger.log("加载BC文件: " + filename);
     llvm::SMDiagnostic err;
+    std::string newfilename = common.renameUnnamedGlobals(filename);
 
     // 创建新的上下文
     llvm::LLVMContext* context = new llvm::LLVMContext();
     common.setContext(context);
 
-    auto module = llvm::parseIRFile(filename, err, *context);
+    auto module = llvm::parseIRFile(newfilename, err, *context);
     common.setModule(std::move(module));
 
     if (!common.hasModule()) {
-        logger.logError("无法加载BC文件: " + filename);
+        logger.logError("无法加载BC文件: " + newfilename);
         err.print("BCModuleSplitter", llvm::errs());
         return false;
     }
@@ -88,13 +90,32 @@ void BCModuleSplitter::analyzeFunctions() {
 
     llvm::Module* module = common.getModule();
     auto& functionMap = common.getFunctionMap();
+    auto& globalVariableMap = common.getGlobalVariableMap();
 
-    // 收集所有函数，只为无名函数分配序号
+    // 收集所有全局变量，只为无名全局变量分配序号
     int unnamedSequenceNumber = 0;
+    for (llvm::GlobalVariable& GV : module->globals()) {
+
+        GlobalVariableInfo tempInfo(&GV);  // 临时对象用于判断是否为无名全局变量
+        bool isUnnamed = tempInfo.isUnnamed();
+        tempInfo.updateAttributesFromLLVM();
+
+        // 只有无名全局变量才分配序号
+        int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
+
+        auto result = globalVariableMap.emplace(&GV, GlobalVariableInfo(&GV, seqNum));
+        if (result.second) {
+            globalVariablePtrs.push_back(&GV);
+        }
+    }
+    logger.log("收集到 " + std::to_string(globalVariableMap.size()) + " 个全局变量");
+    logger.log("其中无名全局变量数量: " + std::to_string(unnamedSequenceNumber));
+
+    const int unnamedGVNumber = unnamedSequenceNumber;
+    // 收集所有函数，只为无名函数分配序号
     for (llvm::Function& func : *module) {
         if (func.isDeclaration()) continue;
 
-        std::string funcName = func.getName().str();
         FunctionInfo tempInfo(&func);  // 临时对象用于判断是否为无名函数
         bool isUnnamed = tempInfo.isUnnamed();
         tempInfo.updateAttributesFromLLVM();
@@ -109,7 +130,7 @@ void BCModuleSplitter::analyzeFunctions() {
     }
 
     logger.log("收集到 " + std::to_string(functionMap.size()) + " 个函数定义");
-    logger.log("其中无名函数数量: " + std::to_string(unnamedSequenceNumber));
+    logger.log("其中无名函数数量: " + std::to_string(unnamedSequenceNumber - unnamedGVNumber));
 
     // 分析调用关系
     for (llvm::Function& func : *module) {
@@ -139,6 +160,12 @@ void BCModuleSplitter::analyzeFunctions() {
         }
     }
 
+    std::unordered_set<llvm::Function*> internalFunctionsFromGlobals = collectInternalFunctionsFromGlobals();
+    for (llvm::Function* func : internalFunctionsFromGlobals) {
+        functionMap[func].isReferencedByGlobals = true;
+    }
+    logger.logToFile("收集到 " + std::to_string(internalFunctionsFromGlobals.size()) + " 个函数被全局变量引用");
+
     common.findCyclicGroups();
 
     logger.log("分析完成，共分析 " + std::to_string(functionMap.size()) + " 个函数");
@@ -149,17 +176,160 @@ void BCModuleSplitter::printFunctionInfo() {
     logger.logToFile("\n=== 函数调用关系分析 ===");
     for (const auto& pair : functionMap) {
         const FunctionInfo& info = pair.second;
-        std::string groupInfo = info.groupIndex >= 0 ?
-            " [组: " + std::to_string(info.groupIndex) + "]" : " [未分组]";
-        std::string seqInfo = info.isUnnamed() ?
-            " [序号: " + std::to_string(info.sequenceNumber) + "]" : " [有名]";
 
-        logger.logToFile("函数: " + info.displayName +
-            seqInfo +
-            " [出度: " + std::to_string(info.outDegree) +
-            ", 入度: " + std::to_string(info.inDegree) +
-            ", 链接: " + info.getLinkageString() +
-            ", 可见性: " + info.getVisibilityString() + "]" + groupInfo);
+        logger.logToFile(info.getFullInfo());
+    }
+}
+
+// 统计全局变量中引用的internal函数
+std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFromGlobals() {
+    std::unordered_set<llvm::Function*> internalFuncsInGlobals;
+    llvm::Module* module = common.getModule();
+
+    // 首先，收集所有internal函数
+    std::unordered_set<llvm::Function*> internalFuncs;
+    for (llvm::Function& F : *module) {
+        if (F.isDeclaration()) continue;
+        if (F.hasInternalLinkage() || F.hasPrivateLinkage()) {
+            internalFuncs.insert(&F);
+        }
+    }
+
+    // 遍历全局变量
+    for (llvm::GlobalVariable& GV : module->globals()) {
+        if (GV.hasInitializer()) {
+            llvm::Constant* initializer = GV.getInitializer();
+            std::unordered_set<llvm::Function*> funcsInInitializer;
+            if (auto* GA = llvm::dyn_cast<llvm::GlobalAlias>(initializer)) {
+                if (auto* aliasee = GA->getAliasee()) {
+                    collectFunctionsFromConstant(aliasee, funcsInInitializer);
+                }
+            } else {
+                collectFunctionsFromConstant(initializer, funcsInInitializer);
+            }
+
+            // 检查这些函数是否是internal函数
+            for (llvm::Function* F : funcsInInitializer) {
+                if (internalFuncs.count(F)) {
+                    internalFuncsInGlobals.insert(F);
+                }
+            }
+        }
+    }
+
+    return internalFuncsInGlobals;
+}
+
+void BCModuleSplitter::collectFunctionsFromConstant(llvm::Constant* C, std::unordered_set<llvm::Function*>& funcSet) {
+    if (auto* F = llvm::dyn_cast<llvm::Function>(C)) {
+        funcSet.insert(F);
+    } else if (auto* CE = llvm::dyn_cast<llvm::ConstantExpr>(C)) {
+        // 递归处理常量表达式的操作数
+        for (unsigned i = 0, e = CE->getNumOperands(); i < e; ++i) {
+            collectFunctionsFromConstant(llvm::cast<llvm::Constant>(CE->getOperand(i)), funcSet);
+        }
+    } else if (auto* CA = llvm::dyn_cast<llvm::ConstantArray>(C)) {
+        for (unsigned i = 0, e = CA->getNumOperands(); i < e; ++i) {
+            collectFunctionsFromConstant(CA->getOperand(i), funcSet);
+        }
+    } else if (auto* CAG = llvm::dyn_cast<llvm::ConstantAggregate>(C)) {
+        for (unsigned i = 0, e = CAG->getNumOperands(); i < e; ++i) {
+            collectFunctionsFromConstant(CAG->getOperand(i), funcSet);
+        }
+    } else if (auto* CS = llvm::dyn_cast<llvm::ConstantStruct>(C)) {
+        for (unsigned i = 0, e = CS->getNumOperands(); i < e; ++i) {
+            collectFunctionsFromConstant(CS->getOperand(i), funcSet);
+        }
+    } else if (auto* CV = llvm::dyn_cast<llvm::ConstantVector>(C)) {
+        for (unsigned i = 0, e = CV->getNumOperands(); i < e; ++i) {
+            collectFunctionsFromConstant(CV->getOperand(i), funcSet);
+        }
+    } else if (auto* BA = llvm::dyn_cast<llvm::BlockAddress>(C)) {
+        llvm::Function* func = BA->getFunction();
+        funcSet.insert(func);
+    } else if (auto* CDS = llvm::dyn_cast<llvm::ConstantDataSequential>(C)) {
+        return;
+    }
+    // 其他常量类型，如ConstantInt、ConstantFP等，不会引用函数，所以忽略
+}
+
+//遍历internal constant并记录调用者
+void BCModuleSplitter::analyzeInternalConstants() {
+    logger.log("开始分析全局变量被调用情况...");
+    std::string reportFile = "analyzeInternalConstants.txt";
+    auto& globalVariableMap = common.getGlobalVariableMap();
+    const auto& functionMap = common.getFunctionMap();
+    std::unordered_set<llvm::Function*> funcsUsingConstant;
+
+    if (functionMap.empty()) {
+        logger.logError("未初始化");
+    }
+    std::ofstream report(reportFile);
+    if (!report.is_open()) {
+        logger.logError("无法创建分组报告文件: " + reportFile);
+        return;
+    }
+
+    for (auto& pair : globalVariableMap) {
+        GlobalVariableInfo& gv = pair.second;
+        std::set<llvm::User*> visited;
+        if (gv.isInternal && gv.isConstant) {
+            for (llvm::User *U : pair.first->users()) {
+                // 递归查找最终的使用指令
+                findAndRecordUsage(U, gv, visited);
+            }
+        }
+        const GlobalVariableInfo& info = pair.second;
+        if (!info.callers.empty()) {
+            report << "「" << info.displayName << "」被调用: " << std::endl;
+            for (llvm::Function* f : info.callers) {
+                funcsUsingConstant.insert(f);
+                report << "  " << functionMap.find(f)->second.getBriefInfo() << std::endl;
+            }
+        }
+    }
+
+    report << "=== 涉及的函数列表： ===" << std::endl;
+    for (llvm::Function* F : funcsUsingConstant) {
+        report << "  " << functionMap.find(F)->second.getBriefInfo() << std::endl;
+    }
+
+    report.close();
+    logger.log("全局变量被调用情况报告已生成: " + reportFile);
+}
+
+// 递归查找并记录使用位置
+void BCModuleSplitter::findAndRecordUsage(llvm::User *user,
+    GlobalVariableInfo &info, std::set<llvm::User*> visited) {
+
+    // 检查空指针
+    if (!user) return;
+
+    // 防止循环引用
+    if (visited.find(user) != visited.end()) {
+        return;
+    }
+    visited.insert(user);
+
+    // 如果是函数，直接记录
+    if (llvm::Function *F = llvm::dyn_cast<llvm::Function>(user)) {
+        info.callers.insert(F);
+        return;
+    }
+
+    // 如果是指令，记录其所属函数和使用点
+    if (llvm::Instruction *I = llvm::dyn_cast<llvm::Instruction>(user)) {
+        if (llvm::Function *F = I->getFunction()) {
+            info.callers.insert(F);
+        }
+        return;
+    }
+
+    // 如果是常量表达式，继续追踪其使用者
+    if (llvm::Constant *C = llvm::dyn_cast<llvm::Constant>(user)) {
+        for (llvm::User *U : C->users()) {
+            findAndRecordUsage(U, info, visited);
+        }
     }
 }
 
@@ -246,12 +416,12 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     // 新的分组策略（组4-9）
      std::vector<std::string> groupDescriptions = {
-        "前100个函数",
-        "101-400个函数",
-        "401-1000个函数",
-        "1001-2000个函数",
-        "2001-5000个函数",
-        "5001-剩余所有函数"
+        "前200个函数",
+        "201-800个函数",
+        "801-2000个函数",
+        "2001-4000个函数",
+        "4001-10000个函数",
+        "10001-剩余所有函数"
     };
 
     for (int i = 4; i <= 9; i++) {
@@ -647,6 +817,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     logger.logToFile("创建全局变量BC文件: " + filename);
 
     llvm::Module* origModule = common.getModule();
+    const auto& globalVariableMap = common.getGlobalVariableMap();
 
     // 1. 使用 CloneModule 克隆整个原始模块（保持所有属性）
     llvm::ValueToValueMapTy VMap;
@@ -661,7 +832,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
         llvm::Value* clonedVal = VMap[origGV];
         if (auto* clonedGV = llvm::dyn_cast_or_null<llvm::GlobalVariable>(clonedVal)) {
             clonedGlobalsToKeep.insert(clonedGV);
-            //logger.logToFile("将保留全局变量: " + origGV->getName().str());
+            logger.logToFile("将保留全局变量: " + globalVariableMap.find(origGV)->second.displayName);
         } else {
             logger.logToFile("警告: 全局变量未成功克隆: " + origGV->getName().str());
         }
@@ -673,7 +844,6 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
         globalsToProcess.push_back(&GV);
     }
 
-    int unnamedIndex = 0;
     for (llvm::GlobalVariable* GV : globalsToProcess) {
         // 检查是否需要保留
         if (clonedGlobalsToKeep.find(GV) != clonedGlobalsToKeep.end()) {
@@ -688,8 +858,6 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
                 GV->setDSOLocal(false);
                 GV->setLinkage(llvm::GlobalValue::ExternalLinkage);
                 GV->setVisibility(llvm::GlobalValue::DefaultVisibility);
-                logger.logToFile("已设置全局变量: " + (GV->getName().empty() ?
-                 "__unnamed_" + std::to_string(unnamedIndex++) : GV->getName().str()));
             }
             continue; // 保留
         }
@@ -803,34 +971,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
                 logger.log("✓ " + std::string(modeStr) + "外部链接函数BC文件验证通过: " + filename);
             }
 
-            if (verified) {
-                // 显示外部链接函数组的详细信息 - 完整打印
-                logger.logToFile("外部链接函数组详情:");
-                int externalCount = 0;
-
-                // 首先打印外部链接函数
-                logger.logToFile("=== 外部链接函数列表 ===");
-                for (llvm::Function* func : externalSet) {
-                    if (externalSet.find(func) != externalSet.end()) {
-                        const FunctionInfo& info = functionMap[func];
-                        std::string funcType = info.isUnnamed() ?
-                            "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                            "有名函数";
-
-                        logger.logToFile("  外部链接函数: " + info.displayName +
-                            " [" + funcType +
-                            ", 入度: " + std::to_string(info.inDegree) +
-                            ", 出度: " + std::to_string(info.outDegree) +
-                            ", 链接: " + info.getLinkageString() +
-                            ", 可见性: " + info.getVisibilityString() +
-                            ", DSO本地: " + (info.dsoLocal ? "是" : "否") + "]");
-                        externalCount++;
-                    }
-                }
-
-                logger.logToFile("统计: 外部链接函数: " + std::to_string(externalCount) + " 个");
-                logger.logToFile("统计: 总计: " + std::to_string(externalFuncs.size()) + " 个函数");
-            } else {
+            if (!verified) {
                 logger.logError("✗ 外部链接函数BC文件验证失败: " + filename);
             }
             fileCount++;
@@ -862,52 +1003,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
                 }
             }
 
-            if (verified) {
-                // 显示高入度函数组的详细信息 - 完整打印
-                logger.logToFile("高入度函数组详情:");
-                int highInDegreeCount = 0;
-                int outDegreeCount = 0;
-
-                // 首先打印高入度函数
-                logger.logToFile("=== 高入度函数列表 ===");
-                for (llvm::Function* func : completeHighInDegreeSet) {
-                    if (highInDegreeSet.find(func) != highInDegreeSet.end()) {
-                        const FunctionInfo& info = functionMap[func];
-                        std::string funcType = info.isUnnamed() ?
-                            "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                            "有名函数";
-                        logger.logToFile("  高入度函数: " + info.displayName +
-                            " [" + funcType +
-                            ", 入度: " + std::to_string(info.inDegree) +
-                            ", 出度: " + std::to_string(info.outDegree) +
-                            ", 链接: " + info.getLinkageString() +
-                            ", 可见性" + info.getVisibilityString() + "]");
-                        highInDegreeCount++;
-                    }
-                }
-
-                // 然后打印出度函数
-                logger.logToFile("=== 出度函数列表 ===");
-                for (llvm::Function* func : completeHighInDegreeSet) {
-                    if (highInDegreeSet.find(func) == highInDegreeSet.end()) {
-                        const FunctionInfo& info = functionMap[func];
-                        std::string funcType = info.isUnnamed() ?
-                            "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                            "有名函数";
-                        logger.logToFile("  出度函数: " + info.displayName +
-                            " [" + funcType +
-                            ", 入度: " + std::to_string(info.inDegree) +
-                            ", 出度: " + std::to_string(info.outDegree) +
-                            ", 链接: " + info.getLinkageString() +
-                            ", 可见性" + info.getVisibilityString() + "]");
-                        outDegreeCount++;
-                    }
-                }
-
-                logger.logToFile("统计: 高入度函数: " + std::to_string(highInDegreeCount) + " 个");
-                logger.logToFile("统计: 出度函数: " + std::to_string(outDegreeCount) + " 个");
-                logger.logToFile("统计: 总计: " + std::to_string(completeHighInDegreeSet.size()) + " 个函数");
-            } else {
+            if (!verified) {
                 logger.logError("✗ 高入度函数BC文件验证失败: " + filename);
             }
             fileCount++;
@@ -935,24 +1031,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
                 }
             }
 
-            if (verified) {
-                // 显示孤立函数组的详细信息 - 完整打印
-                logger.logToFile("孤立函数组详情:");
-                int isolatedCount = 0;
-                for (llvm::Function* func : isolatedSet) {
-                    const FunctionInfo& info = functionMap[func];
-                    std::string funcType = info.isUnnamed() ?
-                        "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                        "有名函数";
-                    logger.logToFile("  孤立函数: " + info.displayName +
-                        " [" + funcType +
-                        ", 入度: " + std::to_string(info.inDegree) +
-                        ", 出度: " + std::to_string(info.outDegree) +
-                        ", 链接: " + info.getLinkageString() + "]");
-                    isolatedCount++;
-                }
-                logger.logToFile("统计: 总计: " + std::to_string(isolatedCount) + " 个孤立函数");
-            } else {
+            if (!verified) {
                 logger.logError("✗ 孤立函数BC文件验证失败: " + filename);
             }
             fileCount++;
@@ -969,12 +1048,12 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     // 定义分组范围
      std::vector<std::pair<int, int>> groupRanges = {
-        {0, 100},      // 第3组: 前100个
-        {100, 400},    // 第4组: 101-400
-        {400, 1000},   // 第5组: 401-1000
-        {1000, 2000},  // 第6组: 1001-2000
-        {2000, 5000},  // 第7组: 2001-5000
-        {5000, -1}     // 第8组: 5001-剩余所有
+        {0, 200},      // 第3组: 前200个
+        {200, 800},    // 第4组: 201-800
+        {800, 2000},   // 第5组: 801-2000
+        {2000, 4000},  // 第6组: 2001-4000
+        {4000, 10000},  // 第7组: 4001-10000
+        {10000, -1}     // 第8组: 10001-剩余所有
     };
 
     int groupIndex = 4; // 从组3开始
@@ -985,6 +1064,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
         // 收集该范围内的函数
         std::unordered_set<llvm::Function*> group = getFunctionGroupByRange(remainingFunctions, start, end);
+        //std::unordered_set<llvm::Function*> completeGroup = group;
         std::unordered_set<llvm::Function*> completeGroup = getOriginWithOutDegreeFunctions(group);
 
         if (completeGroup.empty()) {
@@ -1014,25 +1094,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
                 }
             }
 
-            if (verified) {
-                // 显示组中的所有函数 - 完整打印
-                logger.logToFile("组 " + std::to_string(groupIndex) + " 函数列表:");
-                int funcCount = 0;
-                for (llvm::Function* f : completeGroup) {
-                    const FunctionInfo& info = functionMap[f];
-                    std::string funcType = info.isUnnamed() ?
-                        "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                        "有名函数";
-                    logger.logToFile("  " + std::to_string(++funcCount) + ". " + info.displayName +
-                        " [" + funcType +
-                        ", 入度: " + std::to_string(info.inDegree) +
-                        ", 出度: " + std::to_string(info.outDegree) +
-                        ", 总分: " + std::to_string(info.inDegree + info.outDegree) +
-                        ", 链接: " + info.getLinkageString() +
-                        ", 可见性" + info.getVisibilityString() + "]");
-                }
-                logger.logToFile("组 " + std::to_string(groupIndex) + " 统计: 共 " + std::to_string(completeGroup.size()) + " 个函数");
-            } else {
+            if (!verified) {
                 logger.logError("✗ BC文件验证失败: " + filename);
             }
 
@@ -1068,15 +1130,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
         for (const auto& pair : functionMap) {
             if (!pair.second.isProcessed) {
                 const FunctionInfo& info = pair.second;
-                std::string funcType = info.isUnnamed() ?
-                    "无名函数 [序号:" + std::to_string(info.sequenceNumber) + "]" :
-                    "有名函数";
-                logger.logToFile("  " + std::to_string(++unprocessedCount) + ". " + info.displayName +
-                    " [" + funcType +
-                    ", 出度: " + std::to_string(info.outDegree) +
-                    ", 入度: " + std::to_string(info.inDegree) +
-                    ", 总分: " + std::to_string(info.outDegree + info.inDegree) +
-                    ", 链接: " + (info.funcPtr ? info.getLinkageString() : "N/A") + "]");
+                logger.logToFile(info.getFullInfo());
             }
         }
         logger.logToFile("未处理函数统计: 共 " + std::to_string(unprocessedCount) + " 个函数");
@@ -1166,9 +1220,7 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
             functionMap[origFunc].isProcessed = true;
         }
 
-        logger.logToFile("复制函数: " + origFunc->getName().str() +
-                    " [链接: " + functionMap[origFunc].getLinkageString() +
-                    ", 可见性: " + functionMap[origFunc].getVisibilityString() + "]");
+        logger.logToFile("复制函数: " + functionMap[origFunc].getBriefInfo());
     }
 
     // 写入bitcode
@@ -1202,10 +1254,11 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
         if (it != vmap.end()) {
             // 确保映射到的是Function类型
             if (llvm::Function* newFunc = llvm::dyn_cast<llvm::Function>(it->second)) {
-                if (FunctionInfo::areAllCallersInGroup(origFunc, group, functionMap)) {
-                    newExternalGroup.insert(newFunc);
+                //if (!FunctionInfo::areAllCallersInGroup(origFunc, group, functionMap) ||
+                    //functionMap[origFunc].isReferencedByGlobals) {
+                newExternalGroup.insert(newFunc);
                     //logger.logToFile("需要使用外部链接: " + functionMap[origFunc].displayName);
-                }
+                //}
                 newGroup.insert(newFunc);
             } else {
                 // 处理错误：映射到的不是Function

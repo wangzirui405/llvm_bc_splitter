@@ -10,6 +10,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -26,8 +27,9 @@
 
 class BCModuleSplitter {
 private:
-    BCCommon common;
     std::vector<llvm::Function*> functionPtrs;
+    std::vector<llvm::GlobalVariable*> globalVariablePtrs;
+    BCCommon common;
     Logger logger;
     BCVerifier verifier;
 
@@ -56,7 +58,11 @@ public:
     void analyzeFunctions();
     void printFunctionInfo();
     void generateGroupReport(const std::string& outputPrefix);
-
+    std::unordered_set<llvm::Function*> collectInternalFunctionsFromGlobals();
+    void analyzeInternalConstants();
+    static void collectFunctionsFromConstant(llvm::Constant* C, std::unordered_set<llvm::Function*>& funcSet);
+    static void findAndRecordUsage(llvm::User *user,
+                                GlobalVariableInfo &info, std::set<llvm::User*> visited);
     // 分组获取功能
     std::vector<llvm::Function*> getUnprocessedExternalFunctions();
     std::vector<llvm::Function*> getHighInDegreeFunctions(int threshold = 500);

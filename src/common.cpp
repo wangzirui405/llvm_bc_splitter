@@ -8,6 +8,10 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/Transforms/Utils/Cloning.h"  // 包含 CloneModule 和 ValueToValueMapTy
+#include "llvm/IR/ValueMap.h"              // ValueToValueMapTy 的详细定义
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
@@ -23,6 +27,109 @@ void BCCommon::clear() {
     module.reset();
     functionMap.clear();
     context = nullptr;
+}
+
+bool BCCommon::isNumberString(const std::string& str) {
+    if (str.empty()) return false;
+    for (char c : str) {
+        if (!std::isdigit(c)) return false;
+    }
+    return true;
+}
+
+std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
+
+    llvm::ValueToValueMapTy VMap;
+    llvm::SMDiagnostic err;
+    std::string newfilename = "renamed_" + filename;
+    // 创建新的上下文
+    llvm::LLVMContext* context = new llvm::LLVMContext();
+
+    auto mod = llvm::parseIRFile(filename, err, *context);
+    // 克隆模块
+    std::unique_ptr<llvm::Module> newModule = llvm::CloneModule(*mod, VMap);
+
+    // 计数器用于生成唯一名称
+    unsigned globalVarCounter = 0;
+    unsigned funcCounter = 0;
+    unsigned globalAliasCounter = 0;
+
+    // 第一步：重命名全局变量
+    for (auto& globalVar : newModule->globals()) {
+        std::string oldName = globalVar.getName().str();
+
+        // 检查是否未命名或名称以数字开头（通常是未命名的情况）
+        if (oldName.empty() ||
+            (oldName[0] >= '0' && oldName[0] <= '9')) {
+
+            // 跳过以"llvm."开头的特殊全局变量
+            if (oldName.substr(0, 5) == "llvm.") {
+                continue;
+            }
+
+            // 生成新名称
+            std::string newName = "renamed_global_var_" + std::to_string(globalVarCounter++);
+
+            // 确保名称唯一
+            while (newModule->getNamedValue(newName)) {
+                newName = "renamed_global_var_" + std::to_string(globalVarCounter++);
+            }
+
+            // 直接重命名
+            globalVar.setName(newName);
+            //std::cout << "Renamed global variable: " << oldName << " -> " << newName << std::endl;
+        }
+    }
+
+    // 第二步：重命名函数
+    for (auto& func : newModule->functions()) {
+        std::string oldName = func.getName().str();
+
+        // 检查是否未命名或名称以数字开头
+        if (oldName.empty() ||
+            (oldName[0] >= '0' && oldName[0] <= '9')) {
+
+            // 跳过LLVM内部函数
+            if (oldName.substr(0, 5) == "llvm.") {
+                continue;
+            }
+
+            // 生成新名称
+            std::string newName = "renamed_func_" + std::to_string(funcCounter++);
+
+            // 确保名称唯一
+            while (newModule->getNamedValue(newName)) {
+                newName = "renamed_func_" + std::to_string(funcCounter++);
+            }
+
+            // 直接重命名
+            func.setName(newName);
+            //std::cout << "Renamed function: " << oldName << " -> " << newName << std::endl;
+        }
+    }
+
+    // 第三步：重命名全局别名
+    for (auto& alias : newModule->aliases()) {
+        std::string oldName = alias.getName().str();
+
+        if (oldName.empty() ||
+            (oldName[0] >= '0' && oldName[0] <= '9')) {
+
+            // 生成新名称
+            std::string newName = "renamed_alias_" + std::to_string(globalAliasCounter++);
+
+            // 确保名称唯一
+            while (newModule->getNamedValue(newName)) {
+                newName = "renamed_alias_" + std::to_string(globalAliasCounter++);
+            }
+
+            // 直接重命名
+            alias.setName(newName);
+            //std::cout << "Renamed alias: " << oldName << " -> " << newName << std::endl;
+        }
+    }
+    writeBitcodeSafely(*newModule, newfilename);
+    return newfilename;
 }
 
 // 安全的bitcode写入方法
@@ -140,7 +247,7 @@ void BCCommon::findCyclicGroups() {
         }
     }
 
-    logger.logToFile("Total cyclic groups found: " + std::to_string(cyclicGroups.size()));
+    logger.logToFile("找到的循环群总数: " + std::to_string(cyclicGroups.size()));
 }
 
 /**
@@ -154,7 +261,7 @@ std::unordered_set<llvm::Function*> BCCommon::getCyclicGroupsContainingFunction(
     std::unordered_set<llvm::Function*> allRelatedFuncs;
 
     if (!func) {
-        logger.logWarning("Null function pointer provided to query.");
+        logger.logWarning("查询时提供的函数指针为空。");
         return allRelatedFuncs;
     }
 

@@ -23,6 +23,7 @@
 class BCCommon {
 private:
     std::unique_ptr<llvm::Module> module;
+    std::unordered_map<llvm::GlobalVariable*, GlobalVariableInfo> globalVariableMap;
     std::unordered_map<llvm::Function*, FunctionInfo> functionMap;
     llvm::LLVMContext* context;
     // 存储循环调用组
@@ -39,6 +40,8 @@ public:
     llvm::Module* getModule() const { return module.get(); }
     std::unordered_map<llvm::Function*, FunctionInfo>& getFunctionMap() { return functionMap; }
     const std::unordered_map<llvm::Function*, FunctionInfo>& getFunctionMap() const { return functionMap; }
+    std::unordered_map<llvm::GlobalVariable*, GlobalVariableInfo>& getGlobalVariableMap() { return globalVariableMap; }
+    const std::unordered_map<llvm::GlobalVariable*, GlobalVariableInfo>& getGlobalVariableMap() const { return globalVariableMap; }
     llvm::LLVMContext* getContext() const { return context; }
 
     // 设置器
@@ -49,6 +52,9 @@ public:
     bool hasModule() const { return module != nullptr; }
     size_t getFunctionCount() const { return functionMap.size(); }
     bool writeBitcodeSafely(llvm::Module& mod, const std::string& filename);
+    std::string renameUnnamedGlobals(const std::string& filename);
+    static bool isNumberString(const std::string& str);
+
     // 清空数据
     void clear();
     void findCyclicGroups();
