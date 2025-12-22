@@ -96,9 +96,8 @@ void BCModuleSplitter::analyzeFunctions() {
     int unnamedSequenceNumber = 0;
     for (llvm::GlobalVariable& GV : module->globals()) {
 
-        GlobalVariableInfo tempInfo(&GV);  // 临时对象用于判断是否为无名全局变量
-        bool isUnnamed = tempInfo.isUnnamed();
-        tempInfo.updateAttributesFromLLVM();
+        GlobalVariableInfo tempGVInfo(&GV);  // 临时对象用于判断是否为无名全局变量
+        bool isUnnamed = tempGVInfo.isUnnamed();
 
         // 只有无名全局变量才分配序号
         int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
@@ -116,8 +115,8 @@ void BCModuleSplitter::analyzeFunctions() {
     for (llvm::Function& func : *module) {
         if (func.isDeclaration()) continue;
 
-        FunctionInfo tempInfo(&func);  // 临时对象用于判断是否为无名函数
-        bool isUnnamed = tempInfo.isUnnamed();
+        FunctionInfo tempFInfo(&func);  // 临时对象用于判断是否为无名函数
+        bool isUnnamed = tempFInfo.isUnnamed();
         // 只有无名函数才分配序号
         int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
 
@@ -462,8 +461,8 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         }
 
         // 统计信息
-        AttributeStats globalVariableStatistics;
-        AttributeStats functionStatistics;
+        AttributeStats globalVariableStatistics = AttributeStats();
+        AttributeStats functionStatistics = AttributeStats();
         std::vector<std::set<int>> dependendGroupInfo = common.getGroupDependencies();
 
         // 分析全局变量（仅对组0）
@@ -497,7 +496,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
                     report << "    " << totalFuncs << ", " << tempFInfo.getBriefInfo() << std::endl;
 
                     // 统计链接属性
-                    globalVariableStatistics.addFunctionInfo(tempFInfo);
+                    functionStatistics.addFunctionInfo(tempFInfo);
                 }
             }
             for (int dependGroupIndex : dependendGroupInfo[groupIndex])
@@ -901,7 +900,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     if (!externalFuncs.empty()) {
         std::unordered_set<llvm::Function*> externalSet(externalFuncs.begin(), externalFuncs.end());
-        std::unordered_set<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(externalSet);
+        std::unordered_set<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(externalSet));
         std::string filename = outputPrefix + "_group_external.bc";
 
         if (createBCFile(completeExternalSet, filename, 1)) {
@@ -1197,6 +1196,7 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
             // 确保映射到的是Function类型
             if (llvm::Function* newFunc = llvm::dyn_cast<llvm::Function>(it->second)) {
                 if (!FunctionInfo::areAllCallersInGroup(origFunc, group, functionMap) ||
+                    !FunctionInfo::areAllCalledsInGroup(origFunc, group, functionMap) ||
                     functionMap[origFunc].isReferencedByGlobals || true) {
                     newExternalGroup.insert(newFunc);
                     const auto& info = functionMap[origFunc];

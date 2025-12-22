@@ -163,10 +163,10 @@ std::string AttributeStats::getFunctionsSummary() const {
 std::string AttributeStats::getGlobalVariablesSummary() const {
     std::stringstream ss;
     ss << "链接属性统计:\n";
-    ss << "  外部链接全局变量: " << externalFunctions << "\n";
-    ss << "  内部链接全局变量: " << internalFunctions << "\n";
-    ss << "  弱链接全局变量:   " << weakFunctions << "\n";
-    ss << "  LinkOnce全局变量: " << linkOnceFunctions << "\n";
+    ss << "  外部链接全局变量: " << externalGlobalVariables << "\n";
+    ss << "  内部链接全局变量: " << internalGlobalVariables << "\n";
+    ss << "  弱链接全局变量:   " << weakGlobalVariables << "\n";
+    ss << "  LinkOnce全局变量: " << linkOnceGlobalVariables << "\n";
     ss << "\n";
 
     ss << "DSO本地统计: " << dsoLocalCount << "\n";
@@ -184,8 +184,8 @@ std::string AttributeStats::getGlobalVariablesSummary() const {
     ss << "\n";
 
     ss << "全局变量名称统计:\n";
-    ss << "  有名全局变量: " << namedFunctions << "\n";
-    ss << "  无名全局变量: " << unnamedFunctions << "\n";
+    ss << "  有名全局变量: " << namedGlobalVariables << "\n";
+    ss << "  无名全局变量: " << namedGlobalVariables << "\n";
     ss << "\n";
 
     ss << "编译器相关:" << compilerGenerated << "\n";

@@ -357,6 +357,10 @@ struct AttributeStats {
 
     int compilerGenerated = 0;
 
+public:
+    AttributeStats() = default;
+    ~AttributeStats() = default;
+
     void addFunctionInfo(const FunctionInfo& funcInfo);
     void addGlobalVariableInfo(const GlobalVariableInfo& globalVariableInfo);
     std::string getFunctionsSummary() const;
