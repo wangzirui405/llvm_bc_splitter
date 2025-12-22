@@ -582,18 +582,6 @@ void BCCommon::processBasicBlockCalls(
         }
 
     }
-    const std::string callBaseName = bb->getName().str();
-    if (containsFunctionNameInString(callBaseName)) {
-        const auto& indirectCalledFunc = getFirstMatchingFunction(callBaseName);
-        calledSet.insert(indirectCalledFunc);
-        functionMap[indirectCalledFunc].callerFunctions.insert(callerFunc);
-
-        // 同时记录到通用调用关系中
-        functionMap[callerFunc].calledFunctions.insert(indirectCalledFunc);
-        functionMap[callerFunc].outDegree++;
-
-        functionMap[indirectCalledFunc].inDegree++;
-    }
 
 }
 

@@ -900,7 +900,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     if (!externalFuncs.empty()) {
         std::unordered_set<llvm::Function*> externalSet(externalFuncs.begin(), externalFuncs.end());
-        std::unordered_set<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(externalSet));
+        std::unordered_set<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(externalSet);
         std::string filename = outputPrefix + "_group_external.bc";
 
         if (createBCFile(completeExternalSet, filename, 1)) {
@@ -1196,7 +1196,6 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
             // 确保映射到的是Function类型
             if (llvm::Function* newFunc = llvm::dyn_cast<llvm::Function>(it->second)) {
                 if (!FunctionInfo::areAllCallersInGroup(origFunc, group, functionMap) ||
-                    !FunctionInfo::areAllCalledsInGroup(origFunc, group, functionMap) ||
                     functionMap[origFunc].isReferencedByGlobals || true) {
                     newExternalGroup.insert(newFunc);
                     const auto& info = functionMap[origFunc];
