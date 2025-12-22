@@ -26,7 +26,11 @@ BCCommon::~BCCommon() {
 void BCCommon::clear() {
     module.reset();
     functionMap.clear();
+    globalVariableMap.clear();
+    cyclicGroups.clear();
+    functionToGroupMap.clear();
     context = nullptr;
+    functionNameMatcher.invalidateCache(); // 清理缓存
 }
 
 bool BCCommon::isNumberString(const std::string& str) {
@@ -335,4 +339,308 @@ std::vector<std::set<int>> BCCommon::getGroupDependencies() {
     }
 
     return groupDependencies;
+}
+
+// 当functionMap被外部修改时调用此方法
+void BCCommon::invalidateFunctionNameCache() {
+    functionNameMatcher.invalidateCache();
+}
+
+// 重建函数名缓存
+void BCCommon::rebuildFunctionNameCache() {
+    if (!functionMap.empty()) {
+        functionNameMatcher.rebuildCache(functionMap);
+        logger.log("记录：已缓存" +
+                  std::to_string(functionNameMatcher.getCacheSize()) + "个名字");
+    }
+}
+
+// 确保缓存有效
+void BCCommon::ensureCacheValid() {
+    if (!functionNameMatcher.isCacheValid() && !functionMap.empty()) {
+        rebuildFunctionNameCache();
+    }
+}
+
+// 检查字符串是否包含任何函数名
+bool BCCommon::containsFunctionNameInString(const std::string& str) {
+    ensureCacheValid();
+    return functionNameMatcher.containsFunctionName(str);
+}
+
+// 获取匹配的函数名列表
+std::vector<std::string> BCCommon::getMatchingFunctionNames(const std::string& str) {
+    ensureCacheValid();
+    auto matches = functionNameMatcher.getMatchingFunctions(str);
+
+    std::vector<std::string> result;
+    for (const auto& match : matches) {
+        result.push_back(match.functionName);
+    }
+    return result;
+}
+
+// 获取匹配的函数指针列表
+std::vector<llvm::Function*> BCCommon::getMatchingFunctions(const std::string& str) {
+    ensureCacheValid();
+    auto matches = functionNameMatcher.getMatchingFunctions(str);
+
+    std::vector<llvm::Function*> result;
+    for (const auto& match : matches) {
+        result.push_back(match.functionPtr);
+    }
+    return result;
+}
+
+// 获取首个匹配的函数指针
+llvm::Function* BCCommon::getFirstMatchingFunction(const std::string& str) {
+    ensureCacheValid();
+    auto matches = functionNameMatcher.getMatchingFunctions(str);
+
+    llvm::Function* result;
+    for (const auto& match : matches) {
+        result = match.functionPtr;
+    }
+    return result;
+}
+
+// 获取缓存状态
+bool BCCommon::isFunctionNameCacheValid() const {
+    return functionNameMatcher.isCacheValid();
+}
+
+size_t BCCommon::getFunctionNameCacheSize() const {
+    return functionNameMatcher.getCacheSize();
+}
+
+void BCCommon::analyzeCallRelations() {
+
+    // 首先遍历所有函数，收集personality函数信息
+    for (llvm::Function& func : *module) {
+        if (func.isDeclaration()) continue;
+
+        // 获取personality函数
+        if (func.hasPersonalityFn()) {
+            if (auto* personality = func.getPersonalityFn()) {
+                if (auto* personalityFunc = llvm::dyn_cast<llvm::Function>(personality)) {
+                    if (functionMap.count(&func) && functionMap.count(personalityFunc)) {
+                        // 记录personality函数调用关系
+                        functionMap[&func].personalityCalledFunctions.insert(personalityFunc);
+                        functionMap[personalityFunc].personalityCallerFunctions.insert(&func);
+                    }
+                }
+            }
+        }
+    }
+
+    // 分析函数内的调用关系
+    for (llvm::Function& func : *module) {
+        if (func.isDeclaration()) continue;
+
+        if (!functionMap.count(&func)) {
+            continue;
+        }
+
+        FunctionInfo& funcInfo = functionMap[&func];
+
+        for (llvm::BasicBlock& bb : func) {
+            for (llvm::Instruction& inst : bb) {
+                // 处理普通call指令
+                if (auto* callInst = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+                    processCallInstruction(callInst, &func);
+                }
+                // 处理invoke指令
+                else if (auto* invokeInst = llvm::dyn_cast<llvm::InvokeInst>(&inst)) {
+                    processInvokeInstruction(invokeInst, &func);
+                }
+            }
+        }
+    }
+}
+
+void BCCommon::processCallInstruction(
+    llvm::CallInst* callInst,
+    llvm::Function* callerFunc) {
+
+    llvm::Function* calledFunc = callInst->getCalledFunction();
+
+    // 处理间接调用
+    if (!calledFunc && callInst->getNumOperands() > 0) {
+        llvm::Value* calledValue = callInst->getCalledOperand();
+        if (llvm::isa<llvm::Function>(calledValue)) {
+            calledFunc = llvm::cast<llvm::Function>(calledValue);
+        }
+    }
+
+    // 只记录非内联且存在于functionMap中的函数
+    if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
+        // 记录普通调用关系
+        functionMap[callerFunc].calledFunctions.insert(calledFunc);
+        functionMap[callerFunc].outDegree++;
+
+        functionMap[calledFunc].callerFunctions.insert(callerFunc);
+        functionMap[calledFunc].inDegree++;
+    }
+}
+
+void BCCommon::processInvokeInstruction(
+    llvm::InvokeInst* invokeInst,
+    llvm::Function* callerFunc) {
+
+    // 标记函数包含invoke指令
+    functionMap[callerFunc].hasInvokeInst = true;
+
+    // 获取被调用函数
+    llvm::Function* calledFunc = invokeInst->getCalledFunction();
+
+    if (!calledFunc && invokeInst->getNumOperands() > 0) {
+        llvm::Value* calledValue = invokeInst->getCalledOperand();
+        if (llvm::isa<llvm::Function>(calledValue)) {
+            calledFunc = llvm::cast<llvm::Function>(calledValue);
+        }
+    }
+
+    // 记录invoke调用的函数（正常流程调用）
+    if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
+        functionMap[callerFunc].invokeCalledFunctions.insert(calledFunc);
+        functionMap[calledFunc].invokeCallerFunctions.insert(callerFunc);
+
+        // 同时也要记录到普通调用关系中（invoke也是一种调用）
+        functionMap[callerFunc].calledFunctions.insert(calledFunc);
+        functionMap[callerFunc].outDegree++;
+
+        functionMap[calledFunc].callerFunctions.insert(callerFunc);
+        functionMap[calledFunc].inDegree++;
+    }
+
+    // 记录normal目标块中的函数调用（如果有）
+    if (auto* normalDest = invokeInst->getNormalDest()) {
+        processBasicBlockCalls(normalDest, callerFunc,
+                                functionMap[callerFunc].invokeNormalCalledFunctions,
+                                functionMap[callerFunc].invokeNormalCallerFunctions);
+    }
+
+    // 记录unwind目标块（landingpad）中的函数调用
+    if (auto* unwindDest = invokeInst->getUnwindDest()) {
+        // 首先标记函数包含landingpad
+        for (auto& inst : *unwindDest) {
+            if (llvm::isa<llvm::LandingPadInst>(&inst)) {
+                functionMap[callerFunc].hasLandingPad = true;
+                break;
+            }
+        }
+
+        // 记录landingpad块中的调用
+        processBasicBlockCalls(unwindDest, callerFunc,
+                                functionMap[callerFunc].invokeLandingPadCalledFunctions,
+                                functionMap[callerFunc].invokeLandingPadCallerFunctions);
+
+        // 检查landingpad块中是否有resume指令
+        for (auto& inst : *unwindDest) {
+            if (llvm::isa<llvm::ResumeInst>(&inst)) {
+                functionMap[callerFunc].hasResumeInst = true;
+            }
+            // 检查其他异常处理指令
+            else if (llvm::isa<llvm::CleanupPadInst>(&inst)) {
+                functionMap[callerFunc].hasCleanupPad = true;
+            }
+            else if (llvm::isa<llvm::CatchPadInst>(&inst)) {
+                functionMap[callerFunc].hasCatchPad = true;
+            }
+        }
+    }
+}
+
+void BCCommon::processBasicBlockCalls(
+    llvm::BasicBlock* bb,
+    llvm::Function* callerFunc,
+    std::unordered_set<llvm::Function*>& calledSet,
+    std::unordered_set<llvm::Function*>& callerSet) {
+
+    for (auto& inst : *bb) {
+        llvm::CallBase* callBase = llvm::dyn_cast<llvm::CallBase>(&inst);
+        if (!callBase) continue;
+
+        llvm::Function* calledFunc = callBase->getCalledFunction();
+
+        if (!calledFunc && callBase->getNumOperands() > 0) {
+            llvm::Value* calledValue = callBase->getCalledOperand();
+            if (llvm::isa<llvm::Function>(calledValue)) {
+                calledFunc = llvm::cast<llvm::Function>(calledValue);
+            }
+        }
+
+        if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
+            calledSet.insert(calledFunc);
+            functionMap[calledFunc].callerFunctions.insert(callerFunc);
+
+            // 同时记录到通用调用关系中
+            functionMap[callerFunc].calledFunctions.insert(calledFunc);
+            functionMap[callerFunc].outDegree++;
+
+            functionMap[calledFunc].inDegree++;
+        }
+
+    }
+    const std::string callBaseName = bb->getName().str();
+    if (containsFunctionNameInString(callBaseName)) {
+        const auto& indirectCalledFunc = getFirstMatchingFunction(callBaseName);
+        calledSet.insert(indirectCalledFunc);
+        functionMap[indirectCalledFunc].callerFunctions.insert(callerFunc);
+
+        // 同时记录到通用调用关系中
+        functionMap[callerFunc].calledFunctions.insert(indirectCalledFunc);
+        functionMap[callerFunc].outDegree++;
+
+        functionMap[indirectCalledFunc].inDegree++;
+    }
+
+}
+
+void FunctionNameMatcher::rebuildCache(const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+
+    nameCache.clear();
+    for (const auto& [func, info] : functionMap) {
+        if (!info.displayName.empty()) {
+            nameCache.push_back({info.displayName, func});
+        }
+    }
+    if (functionMap.size() > 100) cacheValid = true;
+}
+
+void FunctionNameMatcher::invalidateCache() {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    cacheValid = false;
+}
+
+bool FunctionNameMatcher::containsFunctionName(const std::string& str) {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+
+    if (!cacheValid || nameCache.empty()) {
+        return false;
+    }
+
+    for (const auto& entry : nameCache) {
+        if (str.find(entry.displayName) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<FunctionNameMatcher::MatchResult> FunctionNameMatcher::getMatchingFunctions(const std::string& str) {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    std::vector<MatchResult> results;
+
+    if (!cacheValid || nameCache.empty()) {
+        return results;
+    }
+
+    for (const auto& entry : nameCache) {
+        if (str.find(entry.displayName) != std::string::npos) {
+            results.push_back({entry.displayName, entry.functionPtr});
+        }
+    }
+    return results;
 }

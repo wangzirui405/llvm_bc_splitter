@@ -45,13 +45,10 @@ int main(int argc, char* argv[]) {
         //splitter.analyzeInternalConstants();
         splitter.printFunctionInfo();
         splitter.splitBCFiles(outputPrefix);
-
         // 批量验证
         splitter.validateAllBCFiles(outputPrefix);
-
         // 生成报告
         splitter.generateGroupReport(outputPrefix);
-
         logger.log("程序执行完成");
     } catch (const std::exception& e) {
         std::cerr << "程序执行过程中发生异常: " << e.what() << std::endl;

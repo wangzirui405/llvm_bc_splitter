@@ -20,6 +20,47 @@
 #include "core.h"
 #include "logging.h"
 
+class FunctionNameMatcher {
+private:
+    struct CacheEntry {
+        std::string displayName;
+        llvm::Function* functionPtr;
+    };
+
+    // 缓存函数名列表
+    std::vector<CacheEntry> nameCache;
+    std::mutex cacheMutex;
+    bool cacheValid = false;
+
+public:
+    FunctionNameMatcher() = default;
+    ~FunctionNameMatcher() = default;
+
+    // 重建缓存
+    void rebuildCache(const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
+
+    // 使缓存失效
+    void invalidateCache();
+
+    // 检查缓存是否有效
+    bool isCacheValid() const { return cacheValid; }
+
+    // 获取缓存大小
+    size_t getCacheSize() const { return nameCache.size(); }
+
+    // 检查字符串是否包含任何函数名
+    bool containsFunctionName(const std::string& str);
+
+    // 获取匹配的所有函数信息
+    struct MatchResult {
+        std::string functionName;
+        llvm::Function* functionPtr;
+    };
+
+    std::vector<MatchResult> getMatchingFunctions(const std::string& str);
+
+};
+
 class BCCommon {
 private:
     std::unique_ptr<llvm::Module> module;
@@ -31,6 +72,7 @@ private:
     // 函数到所属循环组的映射（一个函数可能属于多个组）
     std::unordered_map<llvm::Function*, std::vector<int>> functionToGroupMap;
     Logger logger;
+    FunctionNameMatcher functionNameMatcher;
 
 public:
     BCCommon();
@@ -60,6 +102,34 @@ public:
     void findCyclicGroups();
     std::unordered_set<llvm::Function*> getCyclicGroupsContainingFunction(llvm::Function* func);
     std::vector<std::set<int>> getGroupDependencies();
+
+    // 函数名匹配相关方法
+    bool containsFunctionNameInString(const std::string& str);
+    std::vector<std::string> getMatchingFunctionNames(const std::string& str);
+    std::vector<llvm::Function*> getMatchingFunctions(const std::string& str);
+    llvm::Function* getFirstMatchingFunction(const std::string& str);
+
+    // 缓存管理
+    void rebuildFunctionNameCache();
+    void invalidateFunctionNameCache();
+    bool isFunctionNameCacheValid() const;
+    size_t getFunctionNameCacheSize() const;
+    void analyzeCallRelations();
+    void processCallInstruction(
+        llvm::CallInst* callInst,
+        llvm::Function* callerFunc);
+    void processBasicBlockCalls(
+        llvm::BasicBlock* bb,
+        llvm::Function* callerFunc,
+        std::unordered_set<llvm::Function*>& calledSet,
+        std::unordered_set<llvm::Function*>& callerSet);
+    void processInvokeInstruction(
+        llvm::InvokeInst* invokeInst,
+        llvm::Function* callerFunc);
+
+private:
+    // 确保缓存有效的内部方法
+    void ensureCacheValid();
 };
 
 #endif // BC_SPLITTER_COMMON_H

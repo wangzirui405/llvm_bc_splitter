@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include <sstream>
 
 FunctionInfo::FunctionInfo(llvm::Function* func, int seqNum) {
@@ -14,6 +16,7 @@ FunctionInfo::FunctionInfo(llvm::Function* func, int seqNum) {
 
     // 更新LLVM相关属性
     updateAttributesFromLLVM();
+    updateExceptionInfo();
 
     // 检测是否为无名函数
     bool isUnnamedFunc = isUnnamed();
@@ -184,7 +187,7 @@ bool FunctionInfo::isCompilerGenerated() const {
 }
 
 std::string FunctionInfo::getFullInfo() const {
-    return displayName +
+    std::string info = displayName +
            " [" + getFunctionType() +
            ", 入度:" + std::to_string(inDegree) +
            ", 出度:" + std::to_string(outDegree) +
@@ -194,31 +197,50 @@ std::string FunctionInfo::getFullInfo() const {
            ", 可见性:" + getVisibilityString() +
            ", 类型:" + (isDeclaration ? "声明" : "定义") +
            ", 被全局变量引用: " + (isReferencedByGlobals ? "是" : "否") +
+           ", EH: " + getExceptionAttributes() +
            ", 组:" + (groupIndex >= 0 ? std::to_string(groupIndex) : "未分组") + "]";
+
+    // 添加异常处理信息
+    if (getExceptionInfo().size()) {
+        info += "\n  异常处理信息: " + getExceptionInfo();
+    }
+
+    if (!invokeCalledFunctions.empty()) {
+        info += "\n  Invoke方式调用了 (" + std::to_string(invokeCalledFunctions.size()) + "个):";
+        for (auto* func : invokeCalledFunctions) {
+            info += " " + func->getName().str();
+        }
+    }
+
+    if (!invokeNormalCalledFunctions.empty()) {
+        info += "\n  Invoke方式正常处理路径调用了 (" + std::to_string(invokeNormalCalledFunctions.size()) + "个):";
+        for (auto* func : invokeNormalCalledFunctions) {
+            info += " " + func->getName().str();
+        }
+    }
+
+    if (!invokeLandingPadCalledFunctions.empty()) {
+        info += "\n  Invoke方式正常处理路径调用了 (" + std::to_string(invokeLandingPadCalledFunctions.size()) + "个):";
+        for (auto* func : invokeLandingPadCalledFunctions) {
+            info += " " + func->getName().str();
+        }
+    }
+
+    if (!personalityCalledFunctions.empty()) {
+        info += "\n  异常处理函数调用了(" + std::to_string(personalityCalledFunctions.size()) + "个):";
+        for (auto* func : personalityCalledFunctions) {
+            info += " " + func->getName().str();
+        }
+    }
+
+    return info;
 }
 
 std::string FunctionInfo::getBriefInfo() const {
     return displayName +
-           (isDeclaration ? " (声明)" : " (定义)");
-}
-
-std::string FunctionInfo::getAttributesSummary() const {
-    std::string summary;
-    summary += "链接属性: " + linkageString + " [" + getLinkageAbbreviation() + "]\n";
-    summary += "DSO本地: " + std::string(dsoLocal ? "是" : "否") + "\n";
-    summary += "可见性: " + visibility + "\n";
-    summary += "函数类型: " + std::string(isDeclaration ? "声明" : "定义") + "\n";
-    summary += "名称类型: " + std::string(isUnnamed() ? "无名函数" : "有名函数");
-    if (isUnnamed()) {
-        summary += " [序号:" + std::to_string(sequenceNumber) + "]";
-    }
-    summary += "\n外部链接: " + std::string(isExternal ? "是" : "否");
-    summary += "\n内部链接: " + std::string(isInternal ? "是" : "否");
-    summary += "\n弱链接: " + std::string(isWeak ? "是" : "否");
-    summary += "\nLinkOnce链接: " + std::string(isLinkOnce ? "是" : "否");
-    summary += "\nCommon链接: " + std::string(isCommon ? "是" : "否");
-    summary += "\n编译器生成: " + std::string(isCompilerGenerated() ? "是" : "否");
-    return summary;
+           "{ EH: " + getExceptionAttributes() +
+           ", 链接:" + getLinkageAbbreviation() + "(" + getLinkageString() + ")," +
+           (isDeclaration ? " 声明 }" : " 定义 }");
 }
 
 /**
@@ -276,6 +298,155 @@ bool FunctionInfo::areAllCallersInGroup(llvm::Function* func,
     }
 
     return true;  // 所有调用者都在group中且isProcessed状态一致
+}
+
+/**
+ * 判断指定函数的被调用者是否全部在指定的组中
+ *
+ * @param func 要检查的函数，该函数必须在group和functionMap中
+ * @param group 函数组
+ * @param functionMap 函数信息映射表
+ * @return true 如果func的所有被调用者都在group中
+ * @return false 如果func有被调用者不在group中
+ * @throws std::invalid_argument 如果func不在group或functionMap中
+ */
+bool FunctionInfo::areAllCalledsInGroup(llvm::Function* func,
+                         const std::unordered_set<llvm::Function*>& group,
+                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
+    // 参数检查
+    if (group.find(func) == group.end()) {
+        throw std::invalid_argument("Function must be in the group");
+    }
+
+    auto funcInfoIt = functionMap.find(func);
+    if (funcInfoIt == functionMap.end()) {
+        throw std::invalid_argument("Function must be in functionMap");
+    }
+
+    const auto& calledFunctions = funcInfoIt->second.calledFunctions;
+
+    // 如果函数没有被调用者，那么所有被调用者（没有）都在group中
+    if (calledFunctions.empty()) {
+        return true;
+    }
+
+    // 获取当前函数的 isProcessed 状态
+    bool currentFuncProcessed = funcInfoIt->second.isProcessed;
+
+    // 检查每个被调用者是否都在group中，并检查 isProcessed 状态
+    for (llvm::Function* called : calledFunctions) {
+        // 检查被调用者是否在group中
+        if (group.find(called) == group.end()) {
+            return false;  // 发现一个不在group中的被调用者
+        }
+
+        // 检查被调用者的 isProcessed 状态
+        auto calledInfoIt = functionMap.find(called);
+        if (calledInfoIt == functionMap.end()) {
+            throw std::invalid_argument("Called function must be in functionMap");
+        }
+
+        bool calledProcessed = calledInfoIt->second.isProcessed;
+
+        // 如果一个已被处理一个未被处理，则一定不同组
+        if (currentFuncProcessed != calledProcessed) {
+            return false;
+        }
+    }
+
+    return true;  // 所有被调用者都在group中且isProcessed状态一致
+}
+
+// 更新异常处理信息
+void FunctionInfo::updateExceptionInfo() {
+    if (!funcPtr) return;
+
+    hasInvokeInst = false;
+    hasLandingPad = false;
+    hasResumeInst = false;
+    hasCleanupPad = false;
+    hasCatchPad = false;
+
+    // 检查函数中的指令
+    for (auto& BB : *funcPtr) {
+        for (auto& I : BB) {
+            if (llvm::isa<llvm::InvokeInst>(&I)) {
+                hasInvokeInst = true;
+            }
+            else if (llvm::isa<llvm::LandingPadInst>(&I)) {
+                hasLandingPad = true;
+            }
+            else if (llvm::isa<llvm::ResumeInst>(&I)) {
+                hasResumeInst = true;
+            }
+            else if (llvm::isa<llvm::CleanupPadInst>(&I)) {
+                hasCleanupPad = true;
+            }
+            else if (llvm::isa<llvm::CatchPadInst>(&I)) {
+                hasCatchPad = true;
+            }
+        }
+    }
+}
+
+// 判断是否为异常处理相关函数
+// bool FunctionInfo::isExceptionHandler() const {
+//     return hasLandingPad || hasCleanupPad || hasCatchPad ||
+//            !personalityFunctions.empty() || !invokeLandingPadFunctions.empty();
+// }
+
+// 获取所有异常处理相关调用
+// std::unordered_set<llvm::Function*> FunctionInfo::getAllExceptionRelatedCalls() const {
+//     std::unordered_set<llvm::Function*> result;
+//     result.insert(invokeCalledFunctions.begin(), invokeCalledFunctions.end());
+//     result.insert(invokeLandingPadFunctions.begin(), invokeLandingPadFunctions.end());
+//     result.insert(personalityFunctions.begin(), personalityFunctions.end());
+//     return result;
+// }
+
+// 获取异常处理信息字符串
+std::string FunctionInfo::getExceptionInfo() const {
+    std::string info;
+
+    if (hasInvokeInst) info += "HasInvoke ";
+    if (hasLandingPad) info += "HasLandingPad ";
+    if (hasResumeInst) info += "HasResume ";
+    if (hasCleanupPad) info += "HasCleanupPad ";
+    if (hasCatchPad) info += "HasCatchPad ";
+
+    // 统计调用信息
+    if (!invokeCalledFunctions.empty()) {
+        info += "InvokeCalls:" + std::to_string(invokeCalledFunctions.size()) + " ";
+    }
+
+    if (!invokeLandingPadCalledFunctions.empty()) {
+        info += "LandingPadCalls:" + std::to_string(invokeLandingPadCalledFunctions.size()) + " ";
+    }
+
+    if (!personalityCalledFunctions.empty()) {
+        info += "Personality:" + std::to_string(personalityCalledFunctions.size()) + " ";
+    }
+
+    return info;
+}
+
+// 判断是否通过invoke调用指定函数
+bool FunctionInfo::isInvokeCallTo(llvm::Function* func) const {
+    return invokeCalledFunctions.find(func) != invokeCalledFunctions.end();
+}
+
+// 获取异常处理属性字符串（简略版）
+std::string FunctionInfo::getExceptionAttributes() const {
+    std::string attrs;
+
+    if (hasInvokeInst) attrs += "I";
+    if (hasLandingPad) attrs += "L";
+    if (hasResumeInst) attrs += "R";
+    if (hasCleanupPad) attrs += "C";
+    if (hasCatchPad) attrs += "P";
+    if (!personalityCalledFunctions.empty()) attrs += "E";  // E for personality
+
+    return attrs.empty() ? "-" : attrs;
 }
 
 GlobalVariableInfo::GlobalVariableInfo(llvm::GlobalVariable* gv, int seqNum) {
@@ -465,122 +636,12 @@ std::string GlobalVariableInfo::getFullInfo() const {
            ", DSO本地:" + (dsoLocal ? "是" : "否") +
            ", 可见性:" + getVisibilityString() +
            ", 类型:" + (isDeclaration ? "声明" : "定义") +
-           ", 常量:" + (isConstant ? "是" : "否") +
-           ", 组:" + (groupIndex >= 0 ? std::to_string(groupIndex) : "未分组") + "]";
+           ", 常量:" + (isConstant ? "是" : "否") + "]";
+           //", 组:" + (groupIndex >= 0 ? std::to_string(groupIndex) : "未分组") + "]";
 }
 
 std::string GlobalVariableInfo::getBriefInfo() const {
     return displayName +
            (isConstant ? " (常量)" : "") +
            (isDeclaration ? " (声明)" : " (定义)");
-}
-
-std::string GlobalVariableInfo::getAttributesSummary() const {
-    std::string summary;
-    summary += "链接属性: " + linkageString + " [" + getLinkageAbbreviation() + "]\n";
-    summary += "DSO本地: " + std::string(dsoLocal ? "是" : "否") + "\n";
-    summary += "可见性: " + visibility + "\n";
-    summary += "全局变量类型: " + std::string(isDeclaration ? "声明" : "定义") + "\n";
-    summary += "是否为常量: " + std::string(isConstant ? "是" : "否") + "\n";
-    summary += "名称类型: " + std::string(isUnnamed() ? "无名" : "有名");
-    if (isUnnamed()) {
-        summary += " [序号:" + std::to_string(sequenceNumber) + "]";
-    }
-    summary += "\n外部链接: " + std::string(isExternal ? "是" : "否");
-    summary += "\n内部链接: " + std::string(isInternal ? "是" : "否");
-    summary += "\n弱链接: " + std::string(isWeak ? "是" : "否");
-    summary += "\nLinkOnce链接: " + std::string(isLinkOnce ? "是" : "否");
-    summary += "\nCommon链接: " + std::string(isCommon ? "是" : "否");
-    summary += "\n编译器生成: " + std::string(isCompilerGenerated() ? "是" : "否");
-    return summary;
-}
-
-void AttributeStats::addFunctionInfo(const FunctionInfo& funcInfo) {
-    // 统计链接属性
-    switch (funcInfo.linkage) {
-        case EXTERNAL_LINKAGE: externalLinkage++; break;
-        case AVAILABLE_EXTERNALLY_LINKAGE: availableExternallyLinkage++; break;
-        case LINK_ONCE_ANY_LINKAGE: linkOnceAnyLinkage++; break;
-        case LINK_ONCE_ODR_LINKAGE: linkOnceODRLinkage++; break;
-        case WEAK_ANY_LINKAGE: weakAnyLinkage++; break;
-        case WEAK_ODR_LINKAGE: weakODRLinkage++; break;
-        case APPENDING_LINKAGE: appendingLinkage++; break;
-        case INTERNAL_LINKAGE: internalLinkage++; break;
-        case PRIVATE_LINKAGE: privateLinkage++; break;
-        case EXTERNAL_WEAK_LINKAGE: externalWeakLinkage++; break;
-        case COMMON_LINKAGE: commonLinkage++; break;
-    }
-
-    // 统计DSO本地
-    if (funcInfo.dsoLocal) dsoLocalCount++;
-
-    // 统计可见性
-    if (funcInfo.visibility == "Default") defaultVisibility++;
-    else if (funcInfo.visibility == "Hidden") hiddenVisibility++;
-    else if (funcInfo.visibility == "Protected") protectedVisibility++;
-
-    // 统计声明/定义
-    if (funcInfo.isDeclaration) declarations++;
-    if (funcInfo.isDefinition) definitions++;
-
-    // 统计有名/无名
-    if (funcInfo.isUnnamed()) unnamedFunctions++;
-    else namedFunctions++;
-
-    // 统计链接类型分组
-    if (funcInfo.isExternal) externalFunctions++;
-    if (funcInfo.isInternal) internalFunctions++;
-    if (funcInfo.isWeak) weakFunctions++;
-    if (funcInfo.isLinkOnce) linkOnceFunctions++;
-}
-
-std::string AttributeStats::getLinkageSummary() const {
-    std::stringstream ss;
-    ss << "链接属性详细统计:\n";
-    ss << "  External链接:        " << externalLinkage << "\n";
-    ss << "  AvailableExternally: " << availableExternallyLinkage << "\n";
-    ss << "  LinkOnceAny:         " << linkOnceAnyLinkage << "\n";
-    ss << "  LinkOnceODR:         " << linkOnceODRLinkage << "\n";
-    ss << "  WeakAny:             " << weakAnyLinkage << "\n";
-    ss << "  WeakODR:             " << weakODRLinkage << "\n";
-    ss << "  Appending:           " << appendingLinkage << "\n";
-    ss << "  Internal:            " << internalLinkage << "\n";
-    ss << "  Private:             " << privateLinkage << "\n";
-    ss << "  ExternalWeak:        " << externalWeakLinkage << "\n";
-    ss << "  Common:              " << commonLinkage;
-    return ss.str();
-}
-
-std::string AttributeStats::getSummary() const {
-    std::stringstream ss;
-    ss << "链接属性统计:\n";
-    ss << "  外部链接函数: " << externalFunctions << "\n";
-    ss << "  内部链接函数: " << internalFunctions << "\n";
-    ss << "  弱链接函数:   " << weakFunctions << "\n";
-    ss << "  LinkOnce函数: " << linkOnceFunctions << "\n";
-    ss << "\n";
-
-    ss << "DSO本地统计: " << dsoLocalCount << "\n";
-    ss << "\n";
-
-    ss << "可见性统计:\n";
-    ss << "  Default可见性: " << defaultVisibility << "\n";
-    ss << "  Hidden可见性:  " << hiddenVisibility << "\n";
-    ss << "  Protected可见性: " << protectedVisibility << "\n";
-    ss << "\n";
-
-    ss << "声明/定义统计:\n";
-    ss << "  声明: " << declarations << "\n";
-    ss << "  定义: " << definitions << "\n";
-    ss << "\n";
-
-    ss << "函数名称统计:\n";
-    ss << "  有名函数: " << namedFunctions << "\n";
-    ss << "  无名函数: " << unnamedFunctions << "\n";
-    ss << "\n";
-
-    ss << "编译器相关:\n";
-    ss << "  总共函数: " << (namedFunctions + unnamedFunctions);
-
-    return ss.str();
 }
