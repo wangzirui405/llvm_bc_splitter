@@ -29,7 +29,8 @@ class BCModuleSplitter {
 private:
     std::vector<llvm::Function*> functionPtrs;
     std::vector<llvm::GlobalVariable*> globalVariablePtrs;
-    BCCommon common;
+    BCCommon& common;
+    Config config;
     Logger logger;
     BCVerifier verifier;
 
@@ -46,7 +47,7 @@ private:
     std::string getVisibilityString(llvm::GlobalValue::VisibilityTypes visibility);
 
 public:
-    BCModuleSplitter();
+    BCModuleSplitter(BCCommon& commonRef);
 
     // 配置
     void setCloneMode(bool enable);

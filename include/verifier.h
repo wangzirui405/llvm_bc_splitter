@@ -27,6 +27,7 @@ class BCVerifier {
 private:
     Logger logger;
     BCCommon& common;  // 引用共享数据
+    Config config;
 
     // 辅助函数
     std::string decodeEscapeSequences(const std::string& escapedStr);

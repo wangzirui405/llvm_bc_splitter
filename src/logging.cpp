@@ -1,24 +1,19 @@
 // logging.cpp
 #include "logging.h"
+#include "common.h"
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <filesystem>
 
 Logger::Logger() {
-    logFile.open("bc_splitter.log", std::ios::out | std::ios::app);
-    if (logFile.is_open()) {
-        logFile << "=== BC Splitter 日志开始 ===" << std::endl;
-    } else {
-        std::cerr << "警告: 无法打开日志文件" << std::endl;
-    }
+    Config config;
+    logFile.open(config.workSpace + "logs/bc_splitter.log", std::ios::out | std::ios::app);
+    if (!logFile.is_open()) std::cerr << "警告: 无法打开日志文件" << std::endl;
 }
 
 Logger::~Logger() {
-    if (logFile.is_open()) {
-        logFile << "=== BC Splitter 日志结束 ===" << std::endl;
-        logFile.close();
-    }
+    if (logFile.is_open()) logFile.close();
 }
 
 void Logger::log(const std::string& message) {
@@ -51,7 +46,9 @@ void Logger::logToFile(const std::string& message) {
 }
 
 std::ofstream Logger::createIndividualLogFile(const std::string& bcFilename, const std::string& suffix) {
-    std::string logFilename = bcFilename;
+    Config config;
+    std::string logFilename = config.workSpace + "logs/" + bcFilename;
+
     if (!suffix.empty()) {
         logFilename += suffix;
     }

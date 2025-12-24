@@ -17,6 +17,31 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/Verifier.h"
 
+
+// 打印单个GroupInfo的详细信息
+void GroupInfo::printDetails() const {
+    std::cout << "========== GroupInfo Details ==========" << std::endl;
+    std::cout << "Group ID: " << groupId << std::endl;
+    std::cout << "BC File: " << bcFile << std::endl;
+    std::cout << "Has Konan Cxa Demangle: "
+              << (hasKonanCxaDemangle ? "true" : "false") << std::endl;
+
+    // 打印依赖项
+    std::cout << "Dependencies (" << dependencies.size() << "): ";
+    if (dependencies.empty()) {
+        std::cout << "None";
+    } else {
+        bool first = true;
+        for (int dep : dependencies) {
+            if (!first) std::cout << ", ";
+            std::cout << dep;
+            first = false;
+        }
+    }
+    std::cout << std::endl;
+    std::cout << "======================================" << std::endl;
+}
+
 BCCommon::BCCommon() : context(nullptr) {}
 
 BCCommon::~BCCommon() {
@@ -141,7 +166,7 @@ bool BCCommon::writeBitcodeSafely(llvm::Module& mod, const std::string& filename
     logger.logToFile("安全写入bitcode: " + filename);
 
     std::error_code ec;
-    llvm::raw_fd_ostream outFile(filename, ec, llvm::sys::fs::OF_None);
+    llvm::raw_fd_ostream outFile(config.workSpace + "output/" + filename, ec, llvm::sys::fs::OF_None);
     if (ec) {
         logger.logError("无法创建文件: " + filename + " - " + ec.message());
         return false;
@@ -631,4 +656,45 @@ std::vector<FunctionNameMatcher::MatchResult> FunctionNameMatcher::getMatchingFu
         }
     }
     return results;
+}
+
+bool BCCommon::matchesPattern(const std::string& filename, const std::string& pattern) {
+    // 检查是否以特定前缀开头并以.bc结尾
+    if (pattern.empty()) {
+        return false;
+    }
+    return (filename.find(pattern) != std::string::npos) &&
+           (filename.substr(filename.length() - 3) == ".bc");
+}
+
+bool BCCommon::copyByPattern(const std::string& pattern) {
+    bool anyCopied = false;
+
+    try {
+        // 遍历源目录
+        for (const auto& entry : std::filesystem::directory_iterator(config.workSpace + "output")) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+
+                // 检查文件名是否匹配模式
+                if (matchesPattern(filename, pattern)) {
+                    std::filesystem::path destFile = std::filesystem::path(config.bcWorkDir) / filename;
+
+                    std::filesystem::copy_file(entry.path(), destFile,
+                                  std::filesystem::copy_options::overwrite_existing);
+
+                    anyCopied = true;
+                }
+            }
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "遍历目录失败: " << e.what() << std::endl;
+        return false;
+    }
+
+    if (!anyCopied) {
+        std::cout << "警告: 没有找到匹配的文件" << std::endl;
+    }
+
+    return true;
 }

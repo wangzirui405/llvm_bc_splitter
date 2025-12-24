@@ -3,6 +3,7 @@
 #include "common.h"
 #include "logging.h"
 #include "verifier.h"
+#include "linker.h"
 #include "core.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -23,7 +24,7 @@
 #include <queue>
 #include <cstdlib>
 
-BCModuleSplitter::BCModuleSplitter() : verifier(common) {
+BCModuleSplitter::BCModuleSplitter(BCCommon& commonRef) : common(commonRef),verifier(commonRef) {
     // 构造函数初始化verifier时传入common
 }
 
@@ -61,7 +62,7 @@ void BCModuleSplitter::setCloneMode(bool enable) {
 bool BCModuleSplitter::loadBCFile(const std::string& filename) {
     logger.log("加载BC文件: " + filename);
     llvm::SMDiagnostic err;
-    std::string newfilename = common.renameUnnamedGlobals(filename);
+    std::string newfilename = config.workSpace + "output/" + common.renameUnnamedGlobals(filename);
 
     // 创建新的上下文
     llvm::LLVMContext* context = new llvm::LLVMContext();
@@ -238,7 +239,7 @@ void BCModuleSplitter::analyzeInternalConstants() {
     if (functionMap.empty()) {
         logger.logError("未初始化");
     }
-    std::ofstream report(reportFile);
+    std::ofstream report(config.workSpace + "logs/" + reportFile);
     if (!report.is_open()) {
         logger.logError("无法创建分组报告文件: " + reportFile);
         return;
@@ -310,9 +311,12 @@ void BCModuleSplitter::findAndRecordUsage(llvm::User *user,
 // 更新后的生成分组报告方法，添加最终拆分完成后的bc文件的各个链接属性和可见性
 void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     std::string reportFile = outputPrefix + "_group_report.txt";
+    const std::string pathPre = config.workSpace + "output/";
     auto& functionMap = common.getFunctionMap();
     auto& globalVariableMap = common.getGlobalVariableMap();
-    std::ofstream report(reportFile);
+    std::ofstream report(config.workSpace + "logs/" + reportFile);
+
+    auto& fileMap = common.getFileMap();
 
     if (!report.is_open()) {
         logger.logError("无法创建分组报告文件: " + reportFile);
@@ -341,6 +345,24 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         } else {
             ungroupedCount++;
         }
+    }
+
+    // 定义所有可能的BC文件组
+     std::vector<std::pair<std::string, int>> bcFiles = {
+        {"_group_globals.bc", 0},
+        {"_group_external.bc", 1},
+        {"_group_high_in_degree.bc", 2},
+        {"_group_isolated.bc", 3}
+    };
+
+    for (int i = 0; i <= 9; i++ ) {
+        if (i >= 4) bcFiles.emplace_back("_group_" + std::to_string(i) + ".bc", i);
+        std::string filename = outputPrefix + bcFiles[i].first;
+
+        if (!llvm::sys::fs::exists(pathPre + filename)) continue;
+
+        GroupInfo* groupInfo = new GroupInfo(i, filename, false);
+        fileMap.push_back(groupInfo);
     }
 
     report << "=== 分组详情 ===" << std::endl;
@@ -425,26 +447,12 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     // 新增：最终拆分完成后的BC文件链接属性和可见性报告
     report << "=== 最终拆分BC文件链接属性和可见性报告 ===" << std::endl << std::endl;
-
-    // 定义所有可能的BC文件组
-     std::vector<std::pair<std::string, int>> bcFiles = {
-        {"_group_globals.bc", 0},
-        {"_group_external.bc", 1},
-        {"_group_high_in_degree.bc", 2},
-        {"_group_isolated.bc", 3}
-    };
-
-    // 添加组4-9
-    for (int i = 4; i <= 9; i++) {
-        bcFiles.emplace_back("_group_" + std::to_string(i) + ".bc", i);
-    }
-
     // 检查每个BC文件并报告链接属性和可见性
-    for (const auto& bcFileInfo : bcFiles) {
-        std::string filename = outputPrefix + bcFileInfo.first;
-        int groupIndex = bcFileInfo.second;
+    for (const auto& bcFileInfo : fileMap) {
+        std::string filename = bcFileInfo->bcFile;
+        int groupIndex = bcFileInfo->groupId;
 
-        if (!llvm::sys::fs::exists(filename)) {
+        if (!llvm::sys::fs::exists(pathPre + filename)) {
             continue;
         }
 
@@ -453,7 +461,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         // 加载BC文件进行分析
         llvm::LLVMContext tempContext;
         llvm::SMDiagnostic err;
-        auto testModule = llvm::parseIRFile(filename, err, tempContext);
+        auto testModule = llvm::parseIRFile(pathPre + filename, err, tempContext);
 
         if (!testModule) {
             report << "  错误: 无法加载文件进行分析" << std::endl;
@@ -478,6 +486,9 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
                 // 统计链接属性
                 globalVariableStatistics.addGlobalVariableInfo(tempGVInfo);
             }
+            for (int i = 1; i <= fileMap.size(); i++) {
+                fileMap[0]->dependencies.emplace(i);
+            }
             report << "  总计: " << globalVarCount << " 个全局变量" << std::endl;
 
             report << globalVariableStatistics.getGlobalVariablesSummary() << std::endl;
@@ -497,11 +508,14 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
                     // 统计链接属性
                     functionStatistics.addFunctionInfo(tempFInfo);
+
+                    if (tempFInfo.displayName == "Konan_cxa_demangle") fileMap[groupIndex]->hasKonanCxaDemangle = true;
                 }
             }
             for (int dependGroupIndex : dependendGroupInfo[groupIndex])
             {
                 report << "  组[" << groupIndex << "]依赖组[" << dependGroupIndex << "]" << std::endl;
+                fileMap[groupIndex]->dependencies.emplace(dependGroupIndex);
             }
 
             report << "  总计: " << totalFuncs << " 个函数" << std::endl;
@@ -527,12 +541,12 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     int totalBCFiles = 0;
     int validBCFiles = 0;
-     std::vector<std::string> existingFiles;
+    std::vector<std::string> existingFiles;
 
     // 检查文件是否存在并统计
-    for (const auto& bcFileInfo : bcFiles) {
-        std::string filename = outputPrefix + bcFileInfo.first;
-        if (llvm::sys::fs::exists(filename)) {
+    for (const auto& bcFileInfo : fileMap) {
+        std::string filename = bcFileInfo->bcFile;
+        if (llvm::sys::fs::exists(pathPre + filename)) {
             totalBCFiles++;
             existingFiles.push_back(filename);
         }

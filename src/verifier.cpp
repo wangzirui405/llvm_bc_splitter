@@ -106,7 +106,7 @@ bool BCVerifier::verifyFunctionSignature(llvm::Function* func) {
 bool BCVerifier::quickValidateBCFile(const std::string& filename) {
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
 
     if (!testModule) {
         logger.logError("快速验证失败 - 无法加载: " + filename);
@@ -133,7 +133,7 @@ bool BCVerifier::quickValidateBCFileWithLog(const std::string& filename, std::of
 
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
 
     if (!testModule) {
         logger.logToIndividualLog(individualLog, "错误: 无法加载BC文件进行快速验证");
@@ -432,7 +432,7 @@ bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unor
 
     llvm::LLVMContext verifyContext;
     llvm::SMDiagnostic err;
-    auto loadedModule = parseIRFile(filename, err, verifyContext);
+    auto loadedModule = parseIRFile(config.workSpace + "output/" + filename, err, verifyContext);
     std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
 
 
@@ -570,10 +570,11 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 
     int totalFiles = 0;
     int validFiles = 0;
+    std::string pathPrefix = config.workSpace + "output/";
 
     // 检查全局变量组
     std::string globalsFilename = outputPrefix + "_group_globals.bc";
-    if (llvm::sys::fs::exists(globalsFilename)) {
+    if (llvm::sys::fs::exists(pathPrefix + globalsFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(globalsFilename, "_validation");
         if (quickValidateBCFileWithLog(globalsFilename, individualLog)) {
@@ -587,7 +588,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 
     // 检查外部链接函数组
     std::string externalFilename = outputPrefix + "_group_external.bc";
-    if (llvm::sys::fs::exists(externalFilename)) {
+    if (llvm::sys::fs::exists(pathPrefix + externalFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(externalFilename, "_validation");
         if (isCloneMode) {
@@ -610,7 +611,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 
     // 检查高入度函数组
     std::string highInDegreeFilename = outputPrefix + "_group_high_in_degree.bc";
-    if (llvm::sys::fs::exists(highInDegreeFilename)) {
+    if (llvm::sys::fs::exists(pathPrefix + highInDegreeFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(highInDegreeFilename, "_validation");
         if (isCloneMode) {
@@ -633,7 +634,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 
     // 检查孤立函数组
     std::string isolatedFilename = outputPrefix + "_group_isolated.bc";
-    if (llvm::sys::fs::exists(isolatedFilename)) {
+    if (llvm::sys::fs::exists(pathPrefix + isolatedFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(isolatedFilename, "_validation");
         if (isCloneMode) {
@@ -658,7 +659,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
     for (int i = 4; i <= 9; i++) {
         std::string filename = outputPrefix + "_group_" + std::to_string(i) + ".bc";
 
-        if (!llvm::sys::fs::exists(filename)) {
+        if (!llvm::sys::fs::exists(pathPrefix + filename)) {
             continue;
         }
 
@@ -710,7 +711,7 @@ void BCVerifier::analyzeBCFileContent(const std::string& filename) {
 
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
 
     if (!testModule) {
         logger.logToIndividualLog(individualLog, "错误: 无法分析BC文件内容: " + filename, true);

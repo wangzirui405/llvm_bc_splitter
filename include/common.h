@@ -20,6 +20,27 @@
 #include "core.h"
 #include "logging.h"
 
+// 配置结构体
+struct Config {
+    const std::string workDir = "/Users/wangzirui/Desktop/libkn_so/reproduce_kn_shared_20251119_094034/";
+    const std::string relativeDir = "private/var/folders/w7/w26y4gqn3t1f76kvj8r531dr0000gn/T/konan_temp6482467269771911962/";
+    const std::string bcWorkDir = workDir + relativeDir;
+    const std::string responseFile = "/Users/wangzirui/Desktop/libkn_so/reproduce_kn_shared_20251119_094034/response_test_undefined.txt";
+    const std::string workSpace = "/Users/wangzirui/Desktop/libkn_so/test/workspace/";
+};
+
+// 组信息结构体
+struct GroupInfo {
+    int groupId;
+    std::string bcFile;
+    bool hasKonanCxaDemangle = false;
+    std::set<int> dependencies;
+
+    GroupInfo(int id, std::string bc, bool special) : groupId(id), bcFile(bc),
+                                                      hasKonanCxaDemangle(special), dependencies() {}
+    void printDetails() const;
+};
+
 class FunctionNameMatcher {
 private:
     struct CacheEntry {
@@ -66,7 +87,9 @@ private:
     std::unique_ptr<llvm::Module> module;
     std::unordered_map<llvm::GlobalVariable*, GlobalVariableInfo> globalVariableMap;
     std::unordered_map<llvm::Function*, FunctionInfo> functionMap;
+    std::vector<GroupInfo*> fileMap;
     llvm::LLVMContext* context;
+    Config config;
     // 存储循环调用组
     std::vector<std::unordered_set<llvm::Function*>> cyclicGroups;
     // 函数到所属循环组的映射（一个函数可能属于多个组）
@@ -80,6 +103,8 @@ public:
 
     // 获取器
     llvm::Module* getModule() const { return module.get(); }
+    std::vector<GroupInfo*>& getFileMap() { return fileMap; }
+    const std::vector<GroupInfo*>& getFileMap() const { return fileMap; }
     std::unordered_map<llvm::Function*, FunctionInfo>& getFunctionMap() { return functionMap; }
     const std::unordered_map<llvm::Function*, FunctionInfo>& getFunctionMap() const { return functionMap; }
     std::unordered_map<llvm::GlobalVariable*, GlobalVariableInfo>& getGlobalVariableMap() { return globalVariableMap; }
@@ -95,6 +120,8 @@ public:
     size_t getFunctionCount() const { return functionMap.size(); }
     bool writeBitcodeSafely(llvm::Module& mod, const std::string& filename);
     std::string renameUnnamedGlobals(const std::string& filename);
+    static bool matchesPattern(const std::string& filename, const std::string& pattern);
+    bool copyByPattern(const std::string& pattern);
     static bool isNumberString(const std::string& str);
 
     // 清空数据
