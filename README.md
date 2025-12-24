@@ -38,7 +38,7 @@ make
 ### 基本用法
 
 ```bash
-../build_bc_splitter/build/bc_splitter input.bc test_libkn （--clone/clear）
+build/bc_splitter input.bc test_libkn （--clone/clear）
 ```
 
 ### 参数说明
