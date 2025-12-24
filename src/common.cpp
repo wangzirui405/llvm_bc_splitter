@@ -16,6 +16,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/Verifier.h"
+#include <stack>
+#include <filesystem>
 
 
 // 打印单个GroupInfo的详细信息

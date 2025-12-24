@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <set>
 #include <string>
+#include <mutex>
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
