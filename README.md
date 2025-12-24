@@ -1,6 +1,6 @@
 # LLVM BC Splitter
 
-一个用于分割 LLVM 字节码（.bc）文件的工具，可以将包含多个模块的字节码文件拆分为独立的模块文件。
+一个用于分割 LLVM 字节码（.bc）文件的工具，可以将包含多个模块的字节码文件拆分为独立的模块文件,并将.bc文件分别编译为多个.so
 
 ## 功能特性
 
@@ -23,6 +23,8 @@
 git clone https://github.com/wangzirui405/llvm_bc_splitter.git
 cd llvm_bc_splitter
 
+# 根据情况调整CMakelists,目前适配的是MAC系统
+
 # 创建构建目录
 mkdir build && cd build
 
@@ -36,14 +38,26 @@ make
 ### 基本用法
 
 ```bash
-../build_bc_splitter/build/bc_splitter input.bc test_libkn （--clone）
+../build_bc_splitter/build/bc_splitter input.bc test_libkn （--clone/clear）
 ```
 
 ### 参数说明
 
 - `input.bc`：输入的 LLVM 字节码文件（必需）
 - `test_libkn`：输出文件前缀（test_libkn_group_xxx.bc）（必需）
-- `--clone`: 选择克隆模式，不填则为简化模式
+- `--clone`: 选择克隆模式，不填则为简化模式（简化模式暂不维护）
+- `--clear`: 清理构建环境
+
+### 构建的工作目录
+
+```
+workspace/
+├── config/    // 暂无
+├── input/     // 输入件
+├── logs/      // 日志
+├── output/    // 输出产物
+└──  temp/      // 暂无
+```
 
 ## 项目结构
 
@@ -51,16 +65,23 @@ make
 bc_splitter/
 ├── CMakeLists.txt
 ├── include/
-│   ├── logging.h
-│   ├── verifier.h
+│   ├── common.h
 │   ├── core.h
-│   └── splitter.h
+│   ├── linker.h
+│   ├── logging.h
+│   ├── splitter.h
+│   ├── verifier.h
+│   └── workdirectory.h
 ├── src/
-│   ├── logging.cpp
-│   ├── verifier.cpp
+│   ├── auxilium.cpp
+│   ├── common.cpp
 │   ├── core.cpp
+│   ├── linker.cpp
+│   ├── logging.cpp
+│   ├── main.cpp
 │   ├── splitter.cpp
-│   └── main.cpp
+│   ├── verifier.cpp
+│   └── workdirectory.cpp				
 └── README.md
 ```
 
