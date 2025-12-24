@@ -324,7 +324,7 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
         logger.log("-- 组 " + std::to_string(groupId) + ": 开始第二阶段 (有依赖版本)");
     }
 
-    if (!executeLdLld(responseFileWithDep, "--no-defined")) {
+    if (!executeLdLld(responseFileWithDep, "--no-undefined")) {
         success = false;
         std::lock_guard<std::mutex> lock(logMutex);
         logger.logWarning("-- 组 " + std::to_string(groupId) + " 第二阶段失败");
