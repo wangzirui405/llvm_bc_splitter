@@ -486,7 +486,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
                 // 统计链接属性
                 globalVariableStatistics.addGlobalVariableInfo(tempGVInfo);
             }
-            for (int i = 1; i <= fileMap.size(); i++) {
+            for (int i = 1; i < fileMap.size(); i++) {
                 fileMap[0]->dependencies.emplace(i);
             }
             report << "  总计: " << globalVarCount << " 个全局变量" << std::endl;

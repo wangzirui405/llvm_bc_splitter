@@ -171,6 +171,15 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
                 // 写入有依赖版本
                 fileWithDep << modifiedLine << std::endl;
 
+                continue;
+            }
+            if (line.find("--soname libkn.so") != std::string::npos) {
+                // 写入无依赖版本
+                fileNoDep << line << std::endl;
+
+                // 写入有依赖版本
+                fileWithDep << line << std::endl;
+
                 // 在有依赖版本中添加依赖的so
                 std::string depLine = "";
                 if (!deps.empty()) {
@@ -238,31 +247,6 @@ bool BCLinker::executeLdLld(const std::string& responseFilePath, const std::stri
     command += " > " + logFilePath + " 2>&1";
 
     int result = std::system(command.c_str());
-
-    // 读取并记录日志文件内容
-    std::ifstream logFile(logFilePath);
-    if (logFile.is_open()) {
-        std::stringstream ss;
-        std::string line;
-        bool hasError = false;
-        while (std::getline(logFile, line)) {
-            // 只记录错误和警告信息到主日志
-            if (line.find("error:") != std::string::npos ||
-                line.find("Error:") != std::string::npos ||
-                line.find("warning:") != std::string::npos) {
-                if (!hasError) {
-                    ss << "========== " << responseFilePath << " 的错误/警告 ==========" << std::endl;
-                    hasError = true;
-                }
-                ss << line << std::endl;
-            }
-        }
-        if (hasError) {
-            ss << "=========================================" << std::endl;
-            logger.logToFile(ss.str());
-        }
-        logFile.close();
-    }
 
     if (result != 0) {
         logger.logError("命令执行失败: " + command + " (返回码: " + std::to_string(result) + ")");
