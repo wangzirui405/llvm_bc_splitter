@@ -23,7 +23,7 @@
 git clone https://github.com/wangzirui405/llvm_bc_splitter.git
 cd llvm_bc_splitter
 
-# 根据情况调整CMakelists,目前适配的是MAC系统
+# 根据情况更改include/common.h里的Config结构体
 
 # 创建构建目录
 mkdir build && cd build
