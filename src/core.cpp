@@ -192,36 +192,50 @@ std::string FunctionInfo::getFullInfo() const {
     ss << "========== 函数信息 ==========\n";
     ss << "显示名称: " << displayName << "\n";
     if (!name.empty()) {
-        ss << "内部名称: " << name << "\n";
+        ss << "-- 内部名称: " << name << "\n";
     }
     if (sequenceNumber != -1) {
-        ss << "序列号: #" << sequenceNumber << "\n";
+        ss << "序列号: #" << sequenceNumber << ", ";
     }
     ss << "函数指针: " << (funcPtr ? "有效" : "空") << "\n";
 
     // 链接属性部分
     ss << "\n--- 链接属性 ---\n";
-    ss << "链接类型: " << linkageString << "\n";
-    ss << "可见性: " << (visibility.empty() ? "默认" : visibility) << "\n";
-    ss << "DSO本地: " << (dsoLocal ? "是" : "否") << "\n";
-    ss << "是否声明: " << (isDeclaration ? "是" : "否") << "\n";
-    ss << "是否定义: " << (isDefinition ? "是" : "否") << "\n";
+    ss << "链接类型: " << linkageString << ", ";
+    ss << "可见性: " << (visibility.empty() ? "默认" : visibility) << ", ";
+    ss << "DSO本地: " << (dsoLocal ? "是" : "否") << ", ";
+    ss << "是否声明: " << (isDeclaration ? "是" : "否") << ", ";
+    ss << "是否定义: " << (isDefinition ? "是" : "否") << "; ";
 
     // 详细链接类型
-    ss << "外部链接: " << (isExternal ? "是" : "否") << "\n";
-    ss << "内部链接: " << (isInternal ? "是" : "否") << "\n";
-    ss << "弱链接: " << (isWeak ? "是" : "否") << "\n";
-    ss << "LinkOnce: " << (isLinkOnce ? "是" : "否") << "\n";
+    ss << "外部链接: " << (isExternal ? "是" : "否") << ", ";
+    ss << "内部链接: " << (isInternal ? "是" : "否") << ", ";
+    ss << "弱链接: " << (isWeak ? "是" : "否") << ", ";
+    ss << "LinkOnce: " << (isLinkOnce ? "是" : "否") << ", ";
     ss << "Common: " << (isCommon ? "是" : "否") << "\n";
 
     // 调用关系部分
     ss << "\n--- 调用关系 ---\n";
-    ss << "调用图分组: " << (groupIndex == -1 ? "未分组" : std::to_string(groupIndex)) << "\n";
-    ss << "入度: " << inDegree << "\n";
+    ss << "入度: " << inDegree << ", ";
     ss << "出度: " << outDegree << "\n";
     ss << "调用者数量: " << callerFunctions.size() << "\n";
+    if (callerFunctions.size() < 10) {
+        for (const auto* callerFunction : callerFunctions) {
+            ss << "  -- " << callerFunction->getName().str() << "\n";
+        }
+    }
     ss << "被调用函数数量: " << calledFunctions.size() << "\n";
+    if (calledFunctions.size() < 10) {
+        for (const auto* calledFunction : calledFunctions) {
+            ss << "  -- " << calledFunction->getName().str() << "\n";
+        }
+    }
     ss << "个性函数数量: " << personalityCalledFunctions.size() << "\n";
+    if (personalityCalledFunctions.size() < 10) {
+        for (const auto* personalityCalledFunction : personalityCalledFunctions) {
+            ss << "  -- " << personalityCalledFunction->getName().str() << "\n";
+        }
+    }
 
     return ss.str();
 }
