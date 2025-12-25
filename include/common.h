@@ -143,17 +143,12 @@ public:
     bool isFunctionNameCacheValid() const;
     size_t getFunctionNameCacheSize() const;
     void analyzeCallRelations();
-    void processCallInstruction(
-        llvm::CallInst* callInst,
-        llvm::Function* callerFunc);
-    void processBasicBlockCalls(
-        llvm::BasicBlock* bb,
-        llvm::Function* callerFunc,
-        std::unordered_set<llvm::Function*>& calledSet,
-        std::unordered_set<llvm::Function*>& callerSet);
-    void processInvokeInstruction(
-        llvm::InvokeInst* invokeInst,
-        llvm::Function* callerFunc);
+    llvm::Function* findFunctionFromUser(llvm::User* user);
+    llvm::Function* findFunctionForConstant(llvm::Constant* constant);
+    llvm::Function* findFunctionForConstantImpl(llvm::Constant* constant,
+                                                      std::unordered_set<llvm::Constant*>& visited);
+    llvm::Function* findFunctionFromUserImpl(llvm::User* user,
+                                                   std::unordered_set<llvm::User*>& visited);
 
 private:
     // 确保缓存有效的内部方法

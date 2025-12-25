@@ -441,8 +441,7 @@ size_t BCCommon::getFunctionNameCacheSize() const {
 }
 
 void BCCommon::analyzeCallRelations() {
-
-    // 首先遍历所有函数，收集personality函数信息
+    // 首先遍历所有函数
     for (llvm::Function& func : *module) {
         if (func.isDeclaration()) continue;
 
@@ -458,11 +457,6 @@ void BCCommon::analyzeCallRelations() {
                 }
             }
         }
-    }
-
-    // 分析函数内的调用关系
-    for (llvm::Function& func : *module) {
-        if (func.isDeclaration()) continue;
 
         if (!functionMap.count(&func)) {
             continue;
@@ -470,146 +464,210 @@ void BCCommon::analyzeCallRelations() {
 
         FunctionInfo& funcInfo = functionMap[&func];
 
+        // 1. 遍历该函数的使用者，收集调用者信息（入度）
+        // 使用一个临时集合来避免在遍历过程中修改users
+        std::vector<llvm::User*> users;
+        users.reserve(func.getNumUses());
+        for (llvm::Use& use : func.uses()) {
+            if (llvm::User* user = use.getUser()) {
+                users.push_back(user);
+            }
+        }
+
+        for (llvm::User* user : users) {
+            if (!user) continue;
+
+            // 尝试从user中找到其所在的函数
+            llvm::Function* callerFunc = nullptr;
+
+            // 首先检查user本身是否是函数
+            if (llvm::Function* caller = llvm::dyn_cast<llvm::Function>(user)) {
+                callerFunc = caller;
+            }
+            else if (llvm::Instruction* inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+                // 如果user是指令，获取指令所在的函数
+                callerFunc = inst->getFunction();
+            }
+            else if (llvm::BasicBlock* bb = llvm::dyn_cast<llvm::BasicBlock>(user)) {
+                // 如果user是基本块，获取基本块所在的函数
+                callerFunc = bb->getParent();
+            }
+            else if (llvm::Constant* constant = llvm::dyn_cast<llvm::Constant>(user)) {
+                // 对于常量使用，需要向上查找其所在的函数
+                callerFunc = findFunctionForConstant(constant);
+            }
+            // 对于其他类型的user，我们尝试获取其所在的上下文
+            else {
+                callerFunc = findFunctionFromUser(user);
+            }
+
+            // 如果找到了调用者函数，并且它在我们追踪的范围内
+            if (callerFunc && functionMap.count(callerFunc)) {
+                // 添加到调用者集合
+                funcInfo.callerFunctions.insert(callerFunc);
+
+                // 同时更新调用者的出度信息
+                FunctionInfo& callerInfo = functionMap[callerFunc];
+                callerInfo.calledFunctions.insert(&func);
+            }
+        }
+
+        // 2. 遍历函数体，收集被调用函数信息（出度）
         for (llvm::BasicBlock& bb : func) {
             for (llvm::Instruction& inst : bb) {
-                // 处理普通call指令
-                if (auto* callInst = llvm::dyn_cast<llvm::CallInst>(&inst)) {
-                    processCallInstruction(callInst, &func);
+                // 处理调用指令
+                if (llvm::CallInst* callInst = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+                    llvm::Value* calledValue = callInst->getCalledOperand();
+                    if (!calledValue) continue;
+
+                    // 剥离指针转换
+                    calledValue = calledValue->stripPointerCasts();
+
+                    // 检查是否是函数
+                    if (llvm::Function* calledFunc = llvm::dyn_cast<llvm::Function>(calledValue)) {
+                        if (functionMap.count(calledFunc)) {
+                            funcInfo.calledFunctions.insert(calledFunc);
+
+                            // 同时更新被调用者的入度信息
+                            FunctionInfo& calledInfo = functionMap[calledFunc];
+                            calledInfo.callerFunctions.insert(&func);
+                        }
+                    }
                 }
-                // 处理invoke指令
-                else if (auto* invokeInst = llvm::dyn_cast<llvm::InvokeInst>(&inst)) {
-                    processInvokeInstruction(invokeInst, &func);
+                // 处理调用指令的变体（如InvokeInst）
+                else if (llvm::InvokeInst* invokeInst = llvm::dyn_cast<llvm::InvokeInst>(&inst)) {
+                    llvm::Value* calledValue = invokeInst->getCalledOperand();
+                    if (!calledValue) continue;
+
+                    // 剥离指针转换
+                    calledValue = calledValue->stripPointerCasts();
+
+                    if (llvm::Function* calledFunc = llvm::dyn_cast<llvm::Function>(calledValue)) {
+                        if (functionMap.count(calledFunc)) {
+                            funcInfo.calledFunctions.insert(calledFunc);
+
+                            FunctionInfo& calledInfo = functionMap[calledFunc];
+                            calledInfo.callerFunctions.insert(&func);
+                        }
+                    }
+                }
+                // 处理函数地址的存储操作
+                else if (llvm::StoreInst* storeInst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+                    llvm::Value* value = storeInst->getValueOperand();
+                    if (!value) continue;
+
+                    value = value->stripPointerCasts();
+                    if (llvm::Function* storedFunc = llvm::dyn_cast<llvm::Function>(value)) {
+                        if (functionMap.count(storedFunc)) {
+                            funcInfo.calledFunctions.insert(storedFunc);
+
+                            FunctionInfo& storedInfo = functionMap[storedFunc];
+                            storedInfo.callerFunctions.insert(&func);
+                        }
+                    }
+                }
+                // 处理函数地址作为参数传递
+                else {
+                    // 遍历指令的所有操作数
+                    for (unsigned i = 0; i < inst.getNumOperands(); i++) {
+                        llvm::Value* operand = inst.getOperand(i);
+                        if (!operand) continue;
+
+                        operand = operand->stripPointerCasts();
+                        if (llvm::Function* funcOperand = llvm::dyn_cast<llvm::Function>(operand)) {
+                            if (functionMap.count(funcOperand)) {
+                                funcInfo.calledFunctions.insert(funcOperand);
+
+                                FunctionInfo& operandInfo = functionMap[funcOperand];
+                                operandInfo.callerFunctions.insert(&func);
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-}
 
-void BCCommon::processCallInstruction(
-    llvm::CallInst* callInst,
-    llvm::Function* callerFunc) {
-
-    llvm::Function* calledFunc = callInst->getCalledFunction();
-
-    // 处理间接调用
-    if (!calledFunc && callInst->getNumOperands() > 0) {
-        llvm::Value* calledValue = callInst->getCalledOperand();
-        if (llvm::isa<llvm::Function>(calledValue)) {
-            calledFunc = llvm::cast<llvm::Function>(calledValue);
-        }
-    }
-
-    // 只记录非内联且存在于functionMap中的函数
-    if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
-        // 记录普通调用关系
-        functionMap[callerFunc].calledFunctions.insert(calledFunc);
-        functionMap[callerFunc].outDegree++;
-
-        functionMap[calledFunc].callerFunctions.insert(callerFunc);
-        functionMap[calledFunc].inDegree++;
+    // 3. 遍历所有函数，统计入度和出度
+    for (auto& pair : functionMap) {
+        FunctionInfo& funcInfo = pair.second;
+        funcInfo.inDegree = funcInfo.callerFunctions.size();
+        funcInfo.outDegree = funcInfo.calledFunctions.size();
     }
 }
 
-void BCCommon::processInvokeInstruction(
-    llvm::InvokeInst* invokeInst,
-    llvm::Function* callerFunc) {
+// 辅助函数：从常量中查找其所在的函数
+llvm::Function* BCCommon::findFunctionForConstant(llvm::Constant* constant) {
+    if (!constant) return nullptr;
 
-    // 标记函数包含invoke指令
-    functionMap[callerFunc].hasInvokeInst = true;
-
-    // 获取被调用函数
-    llvm::Function* calledFunc = invokeInst->getCalledFunction();
-
-    if (!calledFunc && invokeInst->getNumOperands() > 0) {
-        llvm::Value* calledValue = invokeInst->getCalledOperand();
-        if (llvm::isa<llvm::Function>(calledValue)) {
-            calledFunc = llvm::cast<llvm::Function>(calledValue);
-        }
-    }
-
-    // 记录invoke调用的函数（正常流程调用）
-    if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
-        functionMap[callerFunc].invokeCalledFunctions.insert(calledFunc);
-        functionMap[calledFunc].invokeCallerFunctions.insert(callerFunc);
-
-        // 同时也要记录到普通调用关系中（invoke也是一种调用）
-        functionMap[callerFunc].calledFunctions.insert(calledFunc);
-        functionMap[callerFunc].outDegree++;
-
-        functionMap[calledFunc].callerFunctions.insert(callerFunc);
-        functionMap[calledFunc].inDegree++;
-    }
-
-    // 记录normal目标块中的函数调用（如果有）
-    if (auto* normalDest = invokeInst->getNormalDest()) {
-        processBasicBlockCalls(normalDest, callerFunc,
-                                functionMap[callerFunc].invokeNormalCalledFunctions,
-                                functionMap[callerFunc].invokeNormalCallerFunctions);
-    }
-
-    // 记录unwind目标块（landingpad）中的函数调用
-    if (auto* unwindDest = invokeInst->getUnwindDest()) {
-        // 首先标记函数包含landingpad
-        for (auto& inst : *unwindDest) {
-            if (llvm::isa<llvm::LandingPadInst>(&inst)) {
-                functionMap[callerFunc].hasLandingPad = true;
-                break;
-            }
-        }
-
-        // 记录landingpad块中的调用
-        processBasicBlockCalls(unwindDest, callerFunc,
-                                functionMap[callerFunc].invokeLandingPadCalledFunctions,
-                                functionMap[callerFunc].invokeLandingPadCallerFunctions);
-
-        // 检查landingpad块中是否有resume指令
-        for (auto& inst : *unwindDest) {
-            if (llvm::isa<llvm::ResumeInst>(&inst)) {
-                functionMap[callerFunc].hasResumeInst = true;
-            }
-            // 检查其他异常处理指令
-            else if (llvm::isa<llvm::CleanupPadInst>(&inst)) {
-                functionMap[callerFunc].hasCleanupPad = true;
-            }
-            else if (llvm::isa<llvm::CatchPadInst>(&inst)) {
-                functionMap[callerFunc].hasCatchPad = true;
-            }
-        }
-    }
+    // 使用集合记录已访问的常量，避免无限递归
+    std::unordered_set<llvm::Constant*> visited;
+    return findFunctionForConstantImpl(constant, visited);
 }
 
-void BCCommon::processBasicBlockCalls(
-    llvm::BasicBlock* bb,
-    llvm::Function* callerFunc,
-    std::unordered_set<llvm::Function*>& calledSet,
-    std::unordered_set<llvm::Function*>& callerSet) {
-
-    for (auto& inst : *bb) {
-        llvm::CallBase* callBase = llvm::dyn_cast<llvm::CallBase>(&inst);
-        if (!callBase) continue;
-
-        llvm::Function* calledFunc = callBase->getCalledFunction();
-
-        if (!calledFunc && callBase->getNumOperands() > 0) {
-            llvm::Value* calledValue = callBase->getCalledOperand();
-            if (llvm::isa<llvm::Function>(calledValue)) {
-                calledFunc = llvm::cast<llvm::Function>(calledValue);
-            }
-        }
-
-        if (calledFunc && !calledFunc->isIntrinsic() && functionMap.count(calledFunc)) {
-            calledSet.insert(calledFunc);
-            functionMap[calledFunc].callerFunctions.insert(callerFunc);
-
-            // 同时记录到通用调用关系中
-            functionMap[callerFunc].calledFunctions.insert(calledFunc);
-            functionMap[callerFunc].outDegree++;
-
-            functionMap[calledFunc].inDegree++;
-        }
-
+llvm::Function* BCCommon::findFunctionForConstantImpl(llvm::Constant* constant,
+                                                      std::unordered_set<llvm::Constant*>& visited) {
+    if (!constant || !visited.insert(constant).second) {
+        return nullptr;
     }
 
+    // 遍历常量的所有使用者
+    for (llvm::User* user : constant->users()) {
+        if (!user) continue;
+
+        if (llvm::Instruction* inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+            if (llvm::Function* func = inst->getFunction()) {
+                return func;
+            }
+        }
+        else if (llvm::Constant* constUser = llvm::dyn_cast<llvm::Constant>(user)) {
+            // 递归查找
+            if (llvm::Function* func = findFunctionForConstantImpl(constUser, visited)) {
+                return func;
+            }
+        }
+        else if (llvm::GlobalVariable* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(user)) {
+            // 对于全局变量，我们可能需要查看哪些函数使用这个全局变量
+            // 这里简单返回nullptr，或者可以进一步处理
+            continue;
+        }
+    }
+    return nullptr;
+}
+
+// 辅助函数：从任意User中查找其所在的函数
+llvm::Function* BCCommon::findFunctionFromUser(llvm::User* user) {
+    if (!user) return nullptr;
+
+    std::unordered_set<llvm::User*> visited;
+    return findFunctionFromUserImpl(user, visited);
+}
+
+llvm::Function* BCCommon::findFunctionFromUserImpl(llvm::User* user,
+                                                   std::unordered_set<llvm::User*>& visited) {
+    if (!user || !visited.insert(user).second) {
+        return nullptr;
+    }
+
+    // 尝试获取user的父节点
+    if (llvm::Instruction* inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+        return inst->getFunction();
+    }
+    else if (llvm::BasicBlock* bb = llvm::dyn_cast<llvm::BasicBlock>(user)) {
+        return bb->getParent();
+    }
+    else if (llvm::Function* func = llvm::dyn_cast<llvm::Function>(user)) {
+        return func;
+    }
+
+    // 对于其他类型的User，尝试查找其使用者链
+    for (llvm::User* userOfUser : user->users()) {
+        if (llvm::Function* func = findFunctionFromUserImpl(userOfUser, visited)) {
+            return func;
+        }
+    }
+
+    return nullptr;
 }
 
 void FunctionNameMatcher::rebuildCache(const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {

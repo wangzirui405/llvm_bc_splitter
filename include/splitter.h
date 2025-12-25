@@ -66,7 +66,7 @@ public:
                                 GlobalVariableInfo &info, std::set<llvm::User*> visited);
     // 分组获取功能
     std::vector<llvm::Function*> getUnprocessedExternalFunctions();
-    std::vector<llvm::Function*> getHighInDegreeFunctions(int threshold = 500);
+    std::vector<llvm::Function*> getHighInDegreeFunctions(int threshold = 200);
     std::vector<llvm::Function*> getIsolatedFunctions();
     std::unordered_set<llvm::GlobalVariable*> getGlobalVariables();
     std::vector<llvm::Function*> getTopFunctions(int topN);

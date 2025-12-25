@@ -410,12 +410,12 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     // 新的分组策略（组4-9）
      std::vector<std::string> groupDescriptions = {
-        "前200个函数",
-        "201-1600个函数",
-        "1601-4000个函数",
-        "4001-8000个函数",
-        "8001-20000个函数",
-        "20001-剩余所有函数"
+        "前20个函数",
+        "21-200个函数",
+        "201-2000个函数",
+        "2001-20000个函数",
+        "20001-40000个函数",
+        "40001-剩余所有函数"
     };
 
     for (int i = 4; i <= 9; i++) {
@@ -938,7 +938,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     }
 
     // 步骤3: 处理高入度函数组（包含完整的出度链）
-     std::vector<llvm::Function*> highInDegreeFuncs = getHighInDegreeFunctions(500);
+     std::vector<llvm::Function*> highInDegreeFuncs = getHighInDegreeFunctions(200);
 
     if (!highInDegreeFuncs.empty()) {
         std::unordered_set<llvm::Function*> highInDegreeSet(highInDegreeFuncs.begin(), highInDegreeFuncs.end());
@@ -1003,12 +1003,12 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     // 定义分组范围
      std::vector<std::pair<int, int>> groupRanges = {
-        {0, 200},      // 第3组: 前200个
-        {200, 1600},    // 第4组: 201-1600
-        {1600, 4000},   // 第5组: 1601-4000
-        {4000, 8000},  // 第6组: 4001-8000
-        {8000, 20000},  // 第7组: 8001-20000
-        {20000, -1}     // 第8组: 20001-剩余所有
+        {0, 20},      // 第3组: 前20
+        {20, 200},    // 第4组: 21-200
+        {200, 2000},   // 第5组: 201-2000
+        {2000, 20000},  // 第6组: 2001-20000
+        {20000, 40000},  // 第7组: 20001-40000
+        {40000, -1}     // 第8组: 40001-剩余所有
     };
 
     int groupIndex = 4; // 从组3开始

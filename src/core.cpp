@@ -16,7 +16,6 @@ FunctionInfo::FunctionInfo(llvm::Function* func, int seqNum) {
 
     // 更新LLVM相关属性
     updateAttributesFromLLVM();
-    updateExceptionInfo();
 
     // 检测是否为无名函数
     bool isUnnamedFunc = isUnnamed();
@@ -187,60 +186,75 @@ bool FunctionInfo::isCompilerGenerated() const {
 }
 
 std::string FunctionInfo::getFullInfo() const {
-    std::string info = displayName +
-           " [" + getFunctionType() +
-           ", 入度:" + std::to_string(inDegree) +
-           ", 出度:" + std::to_string(outDegree) +
-           ", 总分:" + std::to_string(inDegree + outDegree) +
-           ", 链接:" + getLinkageAbbreviation() + "(" + getLinkageString() + ")" +
-           ", DSO本地:" + (dsoLocal ? "是" : "否") +
-           ", 可见性:" + getVisibilityString() +
-           ", 类型:" + (isDeclaration ? "声明" : "定义") +
-           ", 被全局变量引用: " + (isReferencedByGlobals ? "是" : "否") +
-           ", EH: " + getExceptionAttributes() +
-           ", 组:" + (groupIndex >= 0 ? std::to_string(groupIndex) : "未分组") + "]";
+    std::stringstream ss;
 
-    // 添加异常处理信息
-    if (getExceptionInfo().size()) {
-        info += "\n  异常处理信息: " + getExceptionInfo();
+    // 基本信息部分
+    ss << "========== 函数信息 ==========\n";
+    ss << "显示名称: " << displayName << "\n";
+    if (!name.empty()) {
+        ss << "内部名称: " << name << "\n";
     }
-
-    if (!invokeCalledFunctions.empty()) {
-        info += "\n  Invoke方式调用了 (" + std::to_string(invokeCalledFunctions.size()) + "个):";
-        for (auto* func : invokeCalledFunctions) {
-            info += " " + func->getName().str();
-        }
+    if (sequenceNumber != -1) {
+        ss << "序列号: #" << sequenceNumber << "\n";
     }
+    ss << "函数指针: " << (funcPtr ? "有效" : "空") << "\n";
 
-    if (!invokeNormalCalledFunctions.empty()) {
-        info += "\n  Invoke方式正常处理路径调用了 (" + std::to_string(invokeNormalCalledFunctions.size()) + "个):";
-        for (auto* func : invokeNormalCalledFunctions) {
-            info += " " + func->getName().str();
-        }
-    }
+    // 链接属性部分
+    ss << "\n--- 链接属性 ---\n";
+    ss << "链接类型: " << linkageString << "\n";
+    ss << "可见性: " << (visibility.empty() ? "默认" : visibility) << "\n";
+    ss << "DSO本地: " << (dsoLocal ? "是" : "否") << "\n";
+    ss << "是否声明: " << (isDeclaration ? "是" : "否") << "\n";
+    ss << "是否定义: " << (isDefinition ? "是" : "否") << "\n";
 
-    if (!invokeLandingPadCalledFunctions.empty()) {
-        info += "\n  Invoke方式正常处理路径调用了 (" + std::to_string(invokeLandingPadCalledFunctions.size()) + "个):";
-        for (auto* func : invokeLandingPadCalledFunctions) {
-            info += " " + func->getName().str();
-        }
-    }
+    // 详细链接类型
+    ss << "外部链接: " << (isExternal ? "是" : "否") << "\n";
+    ss << "内部链接: " << (isInternal ? "是" : "否") << "\n";
+    ss << "弱链接: " << (isWeak ? "是" : "否") << "\n";
+    ss << "LinkOnce: " << (isLinkOnce ? "是" : "否") << "\n";
+    ss << "Common: " << (isCommon ? "是" : "否") << "\n";
 
-    if (!personalityCalledFunctions.empty()) {
-        info += "\n  异常处理函数调用了(" + std::to_string(personalityCalledFunctions.size()) + "个):";
-        for (auto* func : personalityCalledFunctions) {
-            info += " " + func->getName().str();
-        }
-    }
+    // 调用关系部分
+    ss << "\n--- 调用关系 ---\n";
+    ss << "调用图分组: " << (groupIndex == -1 ? "未分组" : std::to_string(groupIndex)) << "\n";
+    ss << "入度: " << inDegree << "\n";
+    ss << "出度: " << outDegree << "\n";
+    ss << "调用者数量: " << callerFunctions.size() << "\n";
+    ss << "被调用函数数量: " << calledFunctions.size() << "\n";
+    ss << "个性函数数量: " << personalityCalledFunctions.size() << "\n";
 
-    return info;
+    return ss.str();
 }
 
 std::string FunctionInfo::getBriefInfo() const {
-    return displayName +
-           "{ EH: " + getExceptionAttributes() +
-           ", 链接:" + getLinkageAbbreviation() + "(" + getLinkageString() + ")," +
-           (isDeclaration ? " 声明 }" : " 定义 }");
+    std::stringstream ss;
+
+    // 函数标识
+    if (sequenceNumber != -1) {
+        ss << "[Func#" << sequenceNumber << "] ";
+    }
+    ss << displayName;
+    if (!name.empty() && name != displayName) {
+        ss << " (" << name << ")";
+    }
+
+    // 链接属性
+    ss << " [" << linkageString;
+    if (dsoLocal) ss << ", dso_local";
+    if (!visibility.empty()) ss << ", " << visibility;
+    ss << "]";
+
+    // 定义状态
+    if (isDeclaration) {
+        ss << " [声明]";
+    } else if (isDefinition) {
+        ss << " [定义]";
+    }
+
+    // 调用关系
+    ss << " 入度:" << inDegree << " 出度:" << outDegree;
+
+    return ss.str();
 }
 
 /**
@@ -355,98 +369,6 @@ bool FunctionInfo::areAllCalledsInGroup(llvm::Function* func,
     }
 
     return true;  // 所有被调用者都在group中且isProcessed状态一致
-}
-
-// 更新异常处理信息
-void FunctionInfo::updateExceptionInfo() {
-    if (!funcPtr) return;
-
-    hasInvokeInst = false;
-    hasLandingPad = false;
-    hasResumeInst = false;
-    hasCleanupPad = false;
-    hasCatchPad = false;
-
-    // 检查函数中的指令
-    for (auto& BB : *funcPtr) {
-        for (auto& I : BB) {
-            if (llvm::isa<llvm::InvokeInst>(&I)) {
-                hasInvokeInst = true;
-            }
-            else if (llvm::isa<llvm::LandingPadInst>(&I)) {
-                hasLandingPad = true;
-            }
-            else if (llvm::isa<llvm::ResumeInst>(&I)) {
-                hasResumeInst = true;
-            }
-            else if (llvm::isa<llvm::CleanupPadInst>(&I)) {
-                hasCleanupPad = true;
-            }
-            else if (llvm::isa<llvm::CatchPadInst>(&I)) {
-                hasCatchPad = true;
-            }
-        }
-    }
-}
-
-// 判断是否为异常处理相关函数
-// bool FunctionInfo::isExceptionHandler() const {
-//     return hasLandingPad || hasCleanupPad || hasCatchPad ||
-//            !personalityFunctions.empty() || !invokeLandingPadFunctions.empty();
-// }
-
-// 获取所有异常处理相关调用
-// std::unordered_set<llvm::Function*> FunctionInfo::getAllExceptionRelatedCalls() const {
-//     std::unordered_set<llvm::Function*> result;
-//     result.insert(invokeCalledFunctions.begin(), invokeCalledFunctions.end());
-//     result.insert(invokeLandingPadFunctions.begin(), invokeLandingPadFunctions.end());
-//     result.insert(personalityFunctions.begin(), personalityFunctions.end());
-//     return result;
-// }
-
-// 获取异常处理信息字符串
-std::string FunctionInfo::getExceptionInfo() const {
-    std::string info;
-
-    if (hasInvokeInst) info += "HasInvoke ";
-    if (hasLandingPad) info += "HasLandingPad ";
-    if (hasResumeInst) info += "HasResume ";
-    if (hasCleanupPad) info += "HasCleanupPad ";
-    if (hasCatchPad) info += "HasCatchPad ";
-
-    // 统计调用信息
-    if (!invokeCalledFunctions.empty()) {
-        info += "InvokeCalls:" + std::to_string(invokeCalledFunctions.size()) + " ";
-    }
-
-    if (!invokeLandingPadCalledFunctions.empty()) {
-        info += "LandingPadCalls:" + std::to_string(invokeLandingPadCalledFunctions.size()) + " ";
-    }
-
-    if (!personalityCalledFunctions.empty()) {
-        info += "Personality:" + std::to_string(personalityCalledFunctions.size()) + " ";
-    }
-
-    return info;
-}
-
-// 判断是否通过invoke调用指定函数
-bool FunctionInfo::isInvokeCallTo(llvm::Function* func) const {
-    return invokeCalledFunctions.find(func) != invokeCalledFunctions.end();
-}
-
-// 获取异常处理属性字符串（简略版）
-std::string FunctionInfo::getExceptionAttributes() const {
-    std::string attrs;
-
-    if (hasInvokeInst) attrs += "I";
-    if (hasLandingPad) attrs += "L";
-    if (hasResumeInst) attrs += "R";
-    if (hasCleanupPad) attrs += "C";
-    if (hasCatchPad) attrs += "P";
-    if (!personalityCalledFunctions.empty()) attrs += "E";  // E for personality
-
-    return attrs.empty() ? "-" : attrs;
 }
 
 GlobalVariableInfo::GlobalVariableInfo(llvm::GlobalVariable* gv, int seqNum) {

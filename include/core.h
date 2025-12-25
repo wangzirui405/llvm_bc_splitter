@@ -116,13 +116,6 @@ struct FunctionInfo {
     bool isReferencedByGlobals = false;
     int sequenceNumber = -1;  // 只有无名函数才有序号，有名函数为-1
 
-    // 函数包含的异常处理指令信息
-    bool hasInvokeInst = false;           // 是否包含invoke指令
-    bool hasLandingPad = false;           // 是否包含landingpad块
-    bool hasResumeInst = false;           // 是否包含resume指令
-    bool hasCleanupPad = false;           // 是否包含cleanuppad
-    bool hasCatchPad = false;             // 是否包含catchpad
-
     // 新增的属性
     LinkageType linkage = EXTERNAL_LINKAGE;  // 链接属性
     std::string linkageString;               // 链接属性字符串表示
@@ -137,41 +130,13 @@ struct FunctionInfo {
     bool isCommon = false;                   // 是否Common链接
 
     // 函数使用信息
-    std::unordered_set<llvm::Function*> calledFunctions;
     std::unordered_set<llvm::Function*> callerFunctions;
-    //std::unordered_set<std::string> allSuccessors;  // 所有后继基本块名称
-    //std::unordered_set<std::string> allPredecessors; // 所有前驱基本块名称
-    // 异常处理相关调用信息
-    //std::vector<InvokeInfo> invokeInstructions;
-    //std::vector<IndirectCallInfo> indirectCalls;
-    //std::unordered_map<std::string, BasicBlockInfo> basicBlocks;
-    std::unordered_set<llvm::Function*> invokeCalledFunctions;     // 通过invoke指令正常调用的函数
-    std::unordered_set<llvm::Function*> invokeCallerFunctions;
-    std::unordered_set<llvm::Function*> invokeNormalCalledFunctions;     // 通过invoke正常处理调用的函数
-    std::unordered_set<llvm::Function*> invokeNormalCallerFunctions;
-    std::unordered_set<llvm::Function*> invokeLandingPadCalledFunctions; // 通过invoke异常处理调用的函数
-    std::unordered_set<llvm::Function*> invokeLandingPadCallerFunctions;
+    std::unordered_set<llvm::Function*> calledFunctions;
     std::unordered_set<llvm::Function*> personalityCalledFunctions;      // personality函数（异常处理函数）
     std::unordered_set<llvm::Function*> personalityCallerFunctions;
 
     FunctionInfo() = default;
     FunctionInfo(llvm::Function* func, int seqNum = -1);
-
-// === 调试信息存储
-    // std::string debugOutput;  // 存储调试输出
-    // std::vector<std::string> debugMessages;  // 存储调试消息
-
-    // // 新增调试方法
-    // void addDebugMessage(const std::string& message);
-    // void addDebugOutput(const std::string& output);
-
-    // // 获取调试信息
-    // std::string getDebugOutput() const;
-    // std::vector<std::string> getDebugMessages() const;
-
-    // // 清空调试信息
-    // void clearDebugInfo();
-// ===
 
     // 获取函数类型描述
     std::string getFunctionType() const;
@@ -205,53 +170,6 @@ struct FunctionInfo {
     static bool areAllCalledsInGroup(llvm::Function* func,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
-    // 新增方法：获取异常处理信息
-    std::string getExceptionInfo() const;
-
-    // // 新增方法：判断是否为异常处理相关函数
-    // bool isExceptionHandler() const;
-
-    // // 新增方法：获取异常处理相关调用图
-    // std::unordered_set<llvm::Function*> getAllExceptionRelatedCalls() const;
-
-    // // 新增方法：获取函数中所有invoke指令的字符化表示
-    // std::string getInvokeInstructionsAsString() const;
-
-    // // 新增方法：获取函数中所有invoke指令的详细信息
-    // std::string getInvokeDetailedInfo() const;
-
-    // // 新增方法：获取基本块中invoke指令的表示
-    // std::string getBasicBlockInvokesAsString() const;
-
-    // // 新增方法：获取函数的控制流图，突出显示invoke指令
-    // std::string getCFGWithInvokesHighlighted() const;
-
-    // // 新增方法：获取invoke指令统计信息
-    // std::string getInvokeStats() const;
-
-    // 新增方法：更新异常处理信息
-    void updateExceptionInfo();
-
-    // 新增方法：判断函数是否通过invoke指令调用指定函数
-    bool isInvokeCallTo(llvm::Function* func) const;
-
-    // 新增方法：获取异常处理属性字符串
-    std::string getExceptionAttributes() const;
-
-    // void analyzeBasicBlocks(llvm::Function* func);
-    // // 新增方法：分析invoke指令
-    // void analyzeInvokeInstructions(llvm::Function* func);
-
-    // // 新增方法：分析间接调用
-    // void analyzeIndirectCalls(llvm::Function* func);
-
-    // // 新增方法：构建控制流图
-    // void buildControlFlowGraph(llvm::Function* func);
-
-    // // 新增方法：获取所有通过invoke调用的函数（包括间接调用可能的目标）
-    // std::unordered_set<llvm::Function*> getAllInvokeTargets() const;
-
-    // static void analyzeIndirectCallPatterns(const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
 
 };
 
