@@ -26,7 +26,7 @@ struct Config {
     const std::string workDir = "/Users/wangzirui/Desktop/libkn_so/reproduce_kn_shared_20251119_094034/";
     const std::string relativeDir = "private/var/folders/w7/w26y4gqn3t1f76kvj8r531dr0000gn/T/konan_temp6482467269771911962/";
     const std::string bcWorkDir = workDir + relativeDir;
-    const std::string responseFile = "/Users/wangzirui/Desktop/libkn_so/reproduce_kn_shared_20251119_094034/response_test_undefined.txt";
+    const std::string responseFile = "/Users/wangzirui/Desktop/libkn_so/reproduce_kn_shared_20251119_094034/response.txt";
     const std::string workSpace = "/Users/wangzirui/Desktop/libkn_so/test/workspace/";
 };
 

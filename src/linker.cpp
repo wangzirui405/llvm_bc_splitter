@@ -174,11 +174,12 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
                 continue;
             }
             if (line.find("--soname libkn.so") != std::string::npos) {
+                modifiedLine = "--soname libkn_" + std::to_string(groupId) + ".so";
                 // 写入无依赖版本
-                fileNoDep << line << std::endl;
+                fileNoDep << modifiedLine << std::endl;
 
                 // 写入有依赖版本
-                fileWithDep << line << std::endl;
+                fileWithDep << modifiedLine << std::endl;
 
                 // 在有依赖版本中添加依赖的so
                 std::string depLine = "";
@@ -237,7 +238,7 @@ bool BCLinker::executeLdLld(const std::string& responseFilePath, const std::stri
     Config config;
     std::string command = "ld.lld @" + responseFilePath;
     if (!extralCommand.empty()) command += " " + extralCommand;
-    logger.log("---- 执行命令: " + command);
+    //logger.log("---- 执行命令: " + command);
 
     // 创建日志文件路径
     std::filesystem::path responsePath(responseFilePath);
@@ -265,10 +266,10 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
     bool success = true;
 
     // 第一阶段：执行无依赖版本
-    {
-        std::lock_guard<std::mutex> lock(logMutex);
-        logger.log("-- 组 " + std::to_string(groupId) + ": 开始第一阶段 (无依赖版本)");
-    }
+    // {
+    //     std::lock_guard<std::mutex> lock(logMutex);
+    //     logger.log("-- 组 " + std::to_string(groupId) + ": 开始第一阶段 (无依赖版本)");
+    // }
 
     if (!executeLdLld(responseFileNoDep, "")) {
         success = false;
@@ -284,10 +285,10 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
     const auto& groups = common.getFileMap();
     const auto& deps = groups[groupId]->dependencies;
     if (!deps.empty()) {
-        {
-            std::lock_guard<std::mutex> lock(logMutex);
-            logger.log("-- 组 " + std::to_string(groupId) + ": 等待依赖组第一阶段完成");
-        }
+        // {
+            // std::lock_guard<std::mutex> lock(logMutex);
+            // logger.log("-- 组 " + std::to_string(groupId) + ": 等待依赖组第一阶段完成");
+        // }
 
         for (int depId : deps) {
             try {
@@ -303,18 +304,19 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
         }
     }
     // 第二阶段：执行有依赖版本（即使第一阶段失败也尝试执行）
-    {
-        std::lock_guard<std::mutex> lock(logMutex);
-        logger.log("-- 组 " + std::to_string(groupId) + ": 开始第二阶段 (有依赖版本)");
-    }
+    // {
+    //     std::lock_guard<std::mutex> lock(logMutex);
+    //     logger.log("-- 组 " + std::to_string(groupId) + ": 开始第二阶段 (有依赖版本)");
+    // }
 
-    if (!executeLdLld(responseFileWithDep, "--no-undefined")) {
+    if (!executeLdLld(responseFileWithDep, "")) {
+    //if (!executeLdLld(responseFileWithDep, "--no-undefined")) {
         success = false;
         std::lock_guard<std::mutex> lock(logMutex);
-        logger.logWarning("-- 组 " + std::to_string(groupId) + " 第二阶段失败");
+        logger.logWarning("---- 组 " + std::to_string(groupId) + " 第二阶段失败");
     } else {
         std::lock_guard<std::mutex> lock(logMutex);
-        logger.log("-- 组 " + std::to_string(groupId) + ": 第二阶段完成");
+        logger.log("---- 组 " + std::to_string(groupId) + ": 第二阶段完成");
     }
 
     promise.set_value(success);
@@ -361,6 +363,7 @@ bool BCLinker::executeAllGroups() {
             logger.logWarning("组[" + std::to_string(groupId) + "]处理失败");
         }
     }
+    if (allSuccess) logger.log("全部编译成功!");
 
     return allSuccess;
 }

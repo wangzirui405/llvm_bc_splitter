@@ -408,19 +408,11 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         report << "总计: " << groupFunctions[3].size() << " 个函数" << std::endl << std::endl;
     }
 
-    // 新的分组策略（组4-9）
-     std::vector<std::string> groupDescriptions = {
-        "前20个函数",
-        "21-200个函数",
-        "201-2000个函数",
-        "2001-20000个函数",
-        "20001-40000个函数",
-        "40001-剩余所有函数"
-    };
+    // 新的分组策略（剩余组）
 
-    for (int i = 4; i <= 9; i++) {
+    for (int i = 4; i < groupFunctions.size(); i++) {
         if (groupFunctions.count(i)) {
-            report << "组 " << i << " (" << groupDescriptions[i-4] << "):" << std::endl;
+            report << "剩余自由分配组(" << i << "): " << std::endl;
             int count = 0;
             for (const std::string& funcName : groupFunctions[i]) {
                 report << "  " << std::to_string(++count) << ". " << funcName << std::endl;
@@ -938,7 +930,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     }
 
     // 步骤3: 处理高入度函数组（包含完整的出度链）
-     std::vector<llvm::Function*> highInDegreeFuncs = getHighInDegreeFunctions(200);
+     std::vector<llvm::Function*> highInDegreeFuncs = getHighInDegreeFunctions(150);
 
     if (!highInDegreeFuncs.empty()) {
         std::unordered_set<llvm::Function*> highInDegreeSet(highInDegreeFuncs.begin(), highInDegreeFuncs.end());
@@ -1001,36 +993,56 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     logger.log("剩余未处理函数数量: " + std::to_string(remainingFunctions.size()));
 
-    // 定义分组范围
-     std::vector<std::pair<int, int>> groupRanges = {
-        {0, 20},      // 第3组: 前20
-        {20, 200},    // 第4组: 21-200
-        {200, 2000},   // 第5组: 201-2000
-        {2000, 20000},  // 第6组: 2001-20000
-        {20000, 40000},  // 第7组: 20001-40000
-        {40000, -1}     // 第8组: 40001-剩余所有
-    };
+    int groupIndex = 4; // 从组4开始
+    int coutRemainingGroup = 0;
 
-    int groupIndex = 4; // 从组3开始
+    // 持续分组直到所有函数都处理完
+    while (coutRemainingGroup < remainingFunctions.size()) {
+        std::unordered_set<llvm::Function*> group;
 
-    for (const auto& range : groupRanges) {
-        int start = range.first;
-        int end = range.second;
+        // 按排名逐个加入函数，直到第一次超过2000个函数
+        for (int i = coutRemainingGroup; i < remainingFunctions.size(); i++) {
+            llvm::Function* func = remainingFunctions[i].first;
 
-        // 收集该范围内的函数
-        std::unordered_set<llvm::Function*> group = getFunctionGroupByRange(remainingFunctions, start, end);
-        //std::unordered_set<llvm::Function*> completeGroup = group;
-        std::unordered_set<llvm::Function*> completeGroup = getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(group));
+            // 检查函数是否已被处理（避免重复处理）
+            auto& functionMap = common.getFunctionMap();
+            if (!func || functionMap[func].isProcessed) {
+                coutRemainingGroup++;
+                continue;
+            }
 
-        if (completeGroup.empty()) {
-            logger.log("组 " + std::to_string(groupIndex) + " 没有函数，跳过");
-            groupIndex++;
-            continue;
+            // 加入当前函数
+            group.insert(func);
+
+            // 计算当前组的强连通分量
+            std::unordered_set<llvm::Function*> tempGroup =
+                getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(group));
+
+            // 如果强连通分量大小超过2000停止
+            if (tempGroup.size() > 2000) {
+                break;
+            }
+
+            // 更新已处理的函数计数
+            coutRemainingGroup++;
+
+            // 如果已经处理完所有函数，跳出循环
+            if (coutRemainingGroup >= remainingFunctions.size()) {
+                break;
+            }
         }
 
-        logger.log("处理组 " + std::to_string(groupIndex) + "，范围 [" +
-            std::to_string(start) + "-" + (end == -1 ? "剩余所有" : std::to_string(end)) +
-            "]，包含 " + std::to_string(completeGroup.size()) + " 个函数");
+        // 如果没有函数可以分组，结束循环
+        if (group.empty()) {
+            break;
+        }
+
+        // 获取最终的分组（强连通分量）
+        std::unordered_set<llvm::Function*> completeGroup =
+            getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(group));
+
+        logger.log("处理组 {" + std::to_string(groupIndex) +
+                   "} 包含 " + std::to_string(completeGroup.size()) + " 个函数");
 
         // 创建BC文件
         std::string filename = outputPrefix + "_group_" + std::to_string(groupIndex) + ".bc";
@@ -1210,7 +1222,7 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
             // 确保映射到的是Function类型
             if (llvm::Function* newFunc = llvm::dyn_cast<llvm::Function>(it->second)) {
                 if (!FunctionInfo::areAllCallersInGroup(origFunc, group, functionMap) ||
-                    functionMap[origFunc].isReferencedByGlobals || true) {
+                    functionMap[origFunc].isReferencedByGlobals) {
                     newExternalGroup.insert(newFunc);
                     const auto& info = functionMap[origFunc];
                     logger.logToFile("需要使用外部链接: " + info.displayName);

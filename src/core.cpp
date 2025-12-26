@@ -205,6 +205,7 @@ std::string FunctionInfo::getFullInfo() const {
     ss << "可见性: " << (visibility.empty() ? "默认" : visibility) << ", ";
     ss << "DSO本地: " << (dsoLocal ? "是" : "否") << ", ";
     ss << "是否声明: " << (isDeclaration ? "是" : "否") << ", ";
+    ss << "是否被全局引用: " << (isReferencedByGlobals ? "是" : "否") << ",";
     ss << "是否定义: " << (isDefinition ? "是" : "否") << "; ";
 
     // 详细链接类型
