@@ -76,9 +76,9 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
     // 创建新的上下文
     llvm::LLVMContext* context = new llvm::LLVMContext();
 
-    auto mod = llvm::parseIRFile(filename, err, *context);
+    auto M = llvm::parseIRFile(filename, err, *context);
     // 克隆模块
-    std::unique_ptr<llvm::Module> newModule = llvm::CloneModule(*mod, VMap);
+    std::unique_ptr<llvm::Module> newM = llvm::CloneModule(*M, VMap);
 
     // 计数器用于生成唯一名称
     unsigned globalVarCounter = 0;
@@ -86,8 +86,8 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
     unsigned globalAliasCounter = 0;
 
     // 第一步：重命名全局变量
-    for (auto& globalVar : newModule->globals()) {
-        std::string oldName = globalVar.getName().str();
+    for (auto& GV : newM->globals()) {
+        std::string oldName = GV.getName().str();
 
         // 检查是否未命名或名称以数字开头（通常是未命名的情况）
         if (oldName.empty() ||
@@ -102,18 +102,18 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
             std::string newName = "renamed_global_var_" + std::to_string(globalVarCounter++);
 
             // 确保名称唯一
-            while (newModule->getNamedValue(newName)) {
+            while (newM->getNamedValue(newName)) {
                 newName = "renamed_global_var_" + std::to_string(globalVarCounter++);
             }
 
             // 直接重命名
-            globalVar.setName(newName);
+            GV.setName(newName);
             //std::cout << "Renamed global variable: " << oldName << " -> " << newName << std::endl;
         }
     }
 
     // 第二步：重命名函数
-    for (auto& F : newModule->functions()) {
+    for (auto& F : newM->functions()) {
         std::string oldName = F.getName().str();
 
         // 检查是否未命名或名称以数字开头
@@ -129,7 +129,7 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
             std::string newName = "renamed_func_" + std::to_string(funcCounter++);
 
             // 确保名称唯一
-            while (newModule->getNamedValue(newName)) {
+            while (newM->getNamedValue(newName)) {
                 newName = "renamed_func_" + std::to_string(funcCounter++);
             }
 
@@ -140,7 +140,7 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
     }
 
     // 第三步：重命名全局别名
-    for (auto& GA : newModule->aliases()) {
+    for (auto& GA : newM->aliases()) {
         std::string oldName = GA.getName().str();
 
         if (oldName.empty() ||
@@ -150,7 +150,7 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
             std::string newName = "renamed_alias_" + std::to_string(globalAliasCounter++);
 
             // 确保名称唯一
-            while (newModule->getNamedValue(newName)) {
+            while (newM->getNamedValue(newName)) {
                 newName = "renamed_alias_" + std::to_string(globalAliasCounter++);
             }
 
@@ -159,7 +159,7 @@ std::string BCCommon::renameUnnamedGlobals(const std::string& filename) {
             //std::cout << "Renamed alias: " << oldName << " -> " << newName << std::endl;
         }
     }
-    writeBitcodeSafely(*newModule, newfilename);
+    writeBitcodeSafely(*newM, newfilename);
     return newfilename;
 }
 

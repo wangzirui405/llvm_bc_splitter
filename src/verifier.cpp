@@ -769,7 +769,7 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
     logger.logToFile("需要修复的函数数量: " + std::to_string(externalFuncNames.size()));
 
     std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
 
     // 统计无名函数数量
     int unnamedCount = 0;
@@ -781,11 +781,11 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
     logger.logToFile("组内无名函数数量: " + std::to_string(unnamedCount));
 
     llvm::LLVMContext newContext;
-    auto newModule = std::make_unique<llvm::Module>(filename, newContext);
+    auto newM = std::make_unique<llvm::Module>(filename, newContext);
 
     // 复制原始模块的基本属性
-    newModule->setTargetTriple(module->getTargetTriple());
-    newModule->setDataLayout(module->getDataLayout());
+    newM->setTargetTriple(M->getTargetTriple());
+    newM->setDataLayout(M->getDataLayout());
 
     // 首先创建所有函数（保持原始链接属性）
     std::unordered_map<std::string, llvm::Function*> newFunctions;
@@ -844,7 +844,7 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
             funcType,
             origF->getLinkage(),
             origF->getName(),
-            newModule.get()
+            newM.get()
         );
 
         // 复制其他属性
@@ -864,9 +864,9 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
     }
 
     // 使用专门的无名函数修复方法
-    batchFixFunctionLinkageWithUnnamedSupport(*newModule, externalFuncNames);
+    batchFixFunctionLinkageWithUnnamedSupport(*newM, externalFuncNames);
 
-    return common.writeBitcodeSafely(*newModule, filename);
+    return common.writeBitcodeSafely(*newM, filename);
 }
 
 // 新增：专门处理无名函数的修复方法

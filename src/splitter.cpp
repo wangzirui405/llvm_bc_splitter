@@ -89,13 +89,13 @@ void BCModuleSplitter::analyzeFunctions() {
         return;
     }
 
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
     auto& functionMap = common.getFunctionMap();
     auto& globalVariableMap = common.getGlobalVariableMap();
 
     // 收集所有全局变量，只为无名全局变量分配序号
     int unnamedSequenceNumber = 0;
-    for (llvm::GlobalVariable& GV : module->globals()) {
+    for (llvm::GlobalVariable& GV : M->globals()) {
 
         GlobalVariableInfo tempGVInfo(&GV);  // 临时对象用于判断是否为无名全局变量
         bool isUnnamed = tempGVInfo.isUnnamed();
@@ -113,7 +113,7 @@ void BCModuleSplitter::analyzeFunctions() {
 
     const int unnamedGVNumber = unnamedSequenceNumber;
     // 收集所有函数，只为无名函数分配序号
-    for (llvm::Function& F : *module) {
+    for (llvm::Function& F : *M) {
         if (F.isDeclaration()) continue;
 
         FunctionInfo tempFInfo(&F);  // 临时对象用于判断是否为无名函数
@@ -159,11 +159,11 @@ void BCModuleSplitter::printFunctionInfo() {
 // 统计全局变量中引用的internal函数
 std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFromGlobals() {
     std::unordered_set<llvm::Function*> internalFuncsInGlobals;
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
 
     // 首先，收集所有internal函数
     std::unordered_set<llvm::Function*> internalFuncs;
-    for (llvm::Function& F : *module) {
+    for (llvm::Function& F : *M) {
         if (F.isDeclaration()) continue;
         if (F.hasInternalLinkage() || F.hasPrivateLinkage()) {
             internalFuncs.insert(&F);
@@ -171,7 +171,7 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFr
     }
 
     // 遍历全局变量
-    for (llvm::GlobalVariable& GV : module->globals()) {
+    for (llvm::GlobalVariable& GV : M->globals()) {
         if (GV.hasInitializer()) {
             llvm::Constant* initializer = GV.getInitializer();
             std::unordered_set<llvm::Function*> funcsInInitializer;
@@ -612,9 +612,9 @@ std::vector<llvm::Function*> BCModuleSplitter::getIsolatedFunctions() {
 
 std::unordered_set<llvm::GlobalVariable*> BCModuleSplitter::getGlobalVariables() {
     std::unordered_set<llvm::GlobalVariable*> globals;
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
 
-    for (llvm::GlobalVariable& global : module->globals()) {
+    for (llvm::GlobalVariable& global : M->globals()) {
         globals.insert(&global);
     }
 
@@ -764,12 +764,12 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getStronglyConnectedCompon
 bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm::GlobalVariable*>& globals, const std::string& filename) {
     logger.logToFile("创建全局变量BC文件: " + filename);
 
-    llvm::Module* origModule = common.getModule();
+    llvm::Module* origM = common.getModule();
     const auto& globalVariableMap = common.getGlobalVariableMap();
 
     // 1. 使用 CloneModule 克隆整个原始模块（保持所有属性）
     llvm::ValueToValueMapTy VMap;
-    std::unique_ptr<llvm::Module> newModule = CloneModule(*origModule, VMap);
+    std::unique_ptr<llvm::Module> newM = CloneModule(*origM, VMap);
 
     // 2. 构建新模块中需要保留的全局变量集合
     std::unordered_set<llvm::GlobalVariable*> clonedGlobalsToKeep;
@@ -788,7 +788,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
 
     // 3. 清理新模块：删除不需要保留的全局变量
     std::vector<llvm::GlobalVariable*> globalsToProcess;
-    for (llvm::GlobalVariable& GV : newModule->globals()) {
+    for (llvm::GlobalVariable& GV : newM->globals()) {
         globalsToProcess.push_back(&GV);
     }
 
@@ -823,7 +823,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
 
     // 4. 清理函数（全部删除或转为声明）
     std::vector<llvm::Function*> functionsToProcess;
-    for (llvm::Function& F : *newModule) {
+    for (llvm::Function& F : *newM) {
         functionsToProcess.push_back(&F);
     }
 
@@ -842,7 +842,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     // 5. 清理其他可能的内容（别名、IFunc等）
     // 删除全局别名（GlobalAlias）
     std::vector<llvm::GlobalAlias*> aliasesToRemove;
-    for (llvm::GlobalAlias& GA : newModule->aliases()) {
+    for (llvm::GlobalAlias& GA : newM->aliases()) {
         aliasesToRemove.push_back(&GA);
     }
     for (llvm::GlobalAlias* GA : aliasesToRemove) {
@@ -851,7 +851,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
 
     // 删除IFunc（间接函数）
     std::vector<llvm::GlobalIFunc*> ifuncsToRemove;
-    for (llvm::GlobalIFunc& GIF : newModule->ifuncs()) {
+    for (llvm::GlobalIFunc& GIF : newM->ifuncs()) {
         ifuncsToRemove.push_back(&GIF);
     }
     for (llvm::GlobalIFunc* GIF : ifuncsToRemove) {
@@ -862,12 +862,12 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     logger.logToFile("模块克隆完成，包含 " +
                      std::to_string(clonedGlobalsToKeep.size()) +
                      " 个全局变量，PIC级别: " +
-                     std::to_string(static_cast<int>(newModule->getPICLevel())));
+                     std::to_string(static_cast<int>(newM->getPICLevel())));
 
     // 7. 设置模块标识符并写入文件
-    newModule->setModuleIdentifier("global_variables");
+    newM->setModuleIdentifier("global_variables");
 
-    return common.writeBitcodeSafely(*newModule, filename);
+    return common.writeBitcodeSafely(*newM, filename);
 }
 
 // 新增：统一的BC文件创建入口，支持两种模式
@@ -1110,13 +1110,13 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
 
     // 使用全新的上下文
     llvm::LLVMContext newContext;
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
     auto& functionMap = common.getFunctionMap();
-    auto newModule = std::make_unique<llvm::Module>(filename, newContext);
+    auto newM = std::make_unique<llvm::Module>(filename, newContext);
 
     // 复制原始模块的基本属性
-    newModule->setTargetTriple(module->getTargetTriple());
-    newModule->setDataLayout(module->getDataLayout());
+    newM->setTargetTriple(M->getTargetTriple());
+    newM->setDataLayout(M->getDataLayout());
 
     // 为每个函数创建签名并保持正确的链接属性
     for (llvm::Function* origF : group) {
@@ -1173,7 +1173,7 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
             funcType,
             origF->getLinkage(),  // 使用原始链接属性
             origF->getName(),
-            newModule.get()
+            newM.get()
         );
 
         // 复制重要属性
@@ -1191,7 +1191,7 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
     }
 
     // 写入bitcode
-    return common.writeBitcodeSafely(*newModule, filename);
+    return common.writeBitcodeSafely(*newM, filename);
 }
 
 // 新增：使用LLVM CloneModule创建BC文件
@@ -1204,17 +1204,17 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
     llvm::ValueToValueMapTy vmap;
     std::unordered_set<llvm::Function*> newExternalGroup;
     std::unordered_set<llvm::Function*> newGroup;
-    llvm::Module* module = common.getModule();
+    llvm::Module* M = common.getModule();
     auto& functionMap = common.getFunctionMap();
-    auto newModule = CloneModule(*module, vmap);
+    auto newM = CloneModule(*M, vmap);
 
-    if (!newModule) {
+    if (!newM) {
         logger.logError("CloneModule失败: " + filename);
         return false;
     }
 
     // 设置模块名称
-    newModule->setModuleIdentifier("cloned_group_" + std::to_string(groupIndex));
+    newM->setModuleIdentifier("cloned_group_" + std::to_string(groupIndex));
     for (llvm::Function* origF : group) {
         // 查找原始函数在vmap中对应的新函数
         auto it = vmap.find(origF);
@@ -1242,10 +1242,10 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
         return false;
     }
     // 处理函数：保留组内函数定义，其他转为声明
-    processClonedModuleFunctions(*newModule, newGroup, newExternalGroup);
+    processClonedModuleFunctions(*newM, newGroup, newExternalGroup);
 
     // 处理全局变量：全部转为external声明
-    processClonedModuleGlobals(*newModule);
+    processClonedModuleGlobals(*newM);
 
     // 标记原始函数已处理
     for (llvm::Function* origF : group) {
@@ -1256,7 +1256,7 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
     }
 
     logger.logToFile("Clone模式完成: " + filename + " (包含 " + std::to_string(group.size()) + " 个函数)");
-    return common.writeBitcodeSafely(*newModule, filename);
+    return common.writeBitcodeSafely(*newM, filename);
 }
 
 // 新增：处理克隆模块中的函数

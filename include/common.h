@@ -113,7 +113,7 @@ public:
     llvm::LLVMContext* getContext() const { return context; }
 
     // 设置器
-    void setModule(std::unique_ptr<llvm::Module> newModule) { module = std::move(newModule); }
+    void setModule(std::unique_ptr<llvm::Module> M) { module = std::move(M); }
     void setContext(llvm::LLVMContext* newContext) { context = newContext; }
 
     // 辅助方法
