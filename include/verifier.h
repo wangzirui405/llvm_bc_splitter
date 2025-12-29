@@ -44,7 +44,7 @@ public:
     BCVerifier(BCCommon& commonRef);
 
     // 核心验证方法
-    bool verifyFunctionSignature(llvm::Function* func);
+    bool verifyFunctionSignature(llvm::Function* F);
     bool quickValidateBCFile(const std::string& filename);
     bool quickValidateBCFileWithLog(const std::string& filename, std::ofstream& individualLog);
 
@@ -68,7 +68,7 @@ public:
                                          const std::unordered_set<std::string>& externalFuncNames,
                                          const std::string& filename,
                                          int groupIndex);
-    void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& mod,
+    void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& M,
                                                  const std::unordered_set<std::string>& externalFuncNames);
 
 };

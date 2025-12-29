@@ -62,7 +62,7 @@ public:
     std::unordered_set<llvm::Function*> collectInternalFunctionsFromGlobals();
     void analyzeInternalConstants();
     static void collectFunctionsFromConstant(llvm::Constant* C, std::unordered_set<llvm::Function*>& funcSet);
-    static void findAndRecordUsage(llvm::User *user,
+    static void findAndRecordUsage(llvm::User *U,
                                 GlobalVariableInfo &info, std::set<llvm::User*> visited);
     // 分组获取功能
     std::vector<llvm::Function*> getUnprocessedExternalFunctions();
@@ -70,7 +70,7 @@ public:
     std::vector<llvm::Function*> getIsolatedFunctions();
     std::unordered_set<llvm::GlobalVariable*> getGlobalVariables();
     std::vector<llvm::Function*> getTopFunctions(int topN);
-    std::unordered_set<llvm::Function*> getFunctionGroup(llvm::Function* func);
+    std::unordered_set<llvm::Function*> getFunctionGroup(llvm::Function* F);
     std::unordered_set<llvm::Function*> getOriginWithOutDegreeFunctions(
         const std::unordered_set<llvm::Function*>& highInDegreeFuncs);
     std::unordered_set<llvm::Function*> getStronglyConnectedComponent(
@@ -105,10 +105,10 @@ private:
                              const std::string& filename,
                              int groupIndex);
     // Clone模式处理
-    void processClonedModuleFunctions(llvm::Module& clonedModule,
+    void processClonedModuleFunctions(llvm::Module& M,
                                     const std::unordered_set<llvm::Function*>& targetGroup,
                                     const std::unordered_set<llvm::Function*>& externalGroup);
-    void processClonedModuleGlobals(llvm::Module& clonedModule);
+    void processClonedModuleGlobals(llvm::Module& M);
 
     // 分组策略
     std::vector<std::pair<llvm::Function*, int>> getRemainingFunctions();

@@ -30,80 +30,6 @@ enum LinkageType {
     COMMON_LINKAGE                  ///< 暂定定义
 };
 
-struct BasicBlockInfo {
-    std::string name;
-    std::vector<llvm::Instruction*> instructions;
-    std::unordered_set<std::string> successors;   // 后继基本块
-    std::unordered_set<std::string> predecessors; // 前驱基本块（新增）
-    bool isLandingPad = false;
-    bool isCleanupPad = false;
-    bool isCatchPad = false;
-
-    BasicBlockInfo() = default;
-    BasicBlockInfo(const std::string& name) : name(name) {}
-
-    // 获取基本块的完整信息
-    std::string getInfo() const {
-        std::string info = name;
-        if (isLandingPad) info += " [LandingPad]";
-        if (isCleanupPad) info += " [CleanupPad]";
-        if (isCatchPad) info += " [CatchPad]";
-        info += "\n  Predecessors: ";
-        for (const auto& pred : predecessors) {
-            info += pred + " ";
-        }
-        info += "\n  Successors: ";
-        for (const auto& succ : successors) {
-            info += succ + " ";
-        }
-        return info;
-    }
-};
-
-// Invoke指令分析结果
-struct InvokeInfo {
-    llvm::InvokeInst* invokeInst = nullptr;
-    std::string normalTarget;     // 正常流程目标基本块
-    std::string unwindTarget;     // 异常处理目标基本块
-    llvm::Value* calledValue = nullptr;  // 被调用的值（可能是函数或函数指针）
-    llvm::Function* calledFunction = nullptr;  // 如果可直接确定函数
-
-    // 是否为间接调用（通过函数指针）
-    bool isIndirectCall = false;
-
-    // 调用参数信息
-    std::vector<llvm::Type*> argTypes;
-    llvm::Type* returnType = nullptr;
-};
-
-// 异常处理路径信息
-struct ExceptionPathInfo {
-    std::string landingPadBlock;  // landingpad基本块
-    std::unordered_set<llvm::Function*> personalityCalls;  // personality函数调用
-    std::unordered_set<llvm::Function*> cleanupCalls;      // cleanup函数调用
-    std::unordered_set<llvm::Function*> catchCalls;        // catch函数调用
-    bool hasResume = false;
-};
-
-// 间接调用分析
-struct IndirectCallInfo {
-    llvm::CallBase* callInst;     // 调用指令（可能是CallInst或InvokeInst）
-    llvm::Value* calledValue;     // 被调用的值
-    llvm::Type* funcType;         // 函数类型
-    bool isInvoke = false;        // 是否为invoke指令
-    std::string normalTarget;     // invoke的正常目标
-    std::string unwindTarget;     // invoke的异常目标
-};
-
-// 控制流图信息
-struct CFGEdge {
-    std::string fromBlock;
-    std::string toBlock;
-    bool isNormalFlow = true;     // true=正常流程, false=异常流程
-    bool isDirectCall = false;    // 是否直接函数调用
-    llvm::Function* calledFunc = nullptr;  // 调用的函数（如果有）
-};
-
 // 函数信息结构体
 struct FunctionInfo {
     std::string name;
@@ -136,7 +62,7 @@ struct FunctionInfo {
     std::unordered_set<llvm::Function*> personalityCallerFunctions;
 
     FunctionInfo() = default;
-    FunctionInfo(llvm::Function* func, int seqNum = -1);
+    FunctionInfo(llvm::Function* F, int seqNum = -1);
 
     // 获取函数类型描述
     std::string getFunctionType() const;
@@ -163,11 +89,11 @@ struct FunctionInfo {
     // 从LLVM函数更新属性
     void updateAttributesFromLLVM();
     // 判断指定函数的调用者是否全部在指定的组中
-    static bool areAllCallersInGroup(llvm::Function* func,
+    static bool areAllCallersInGroup(llvm::Function* F,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
     // 判断指定函数的被调用者是否全部在指定的组中
-    static bool areAllCalledsInGroup(llvm::Function* func,
+    static bool areAllCalledsInGroup(llvm::Function* F,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
 
@@ -201,7 +127,7 @@ struct GlobalVariableInfo {
     std::unordered_set<llvm::Function*> callers;
 
     GlobalVariableInfo() = default;
-    GlobalVariableInfo(llvm::GlobalVariable* gvPtr, int seqNum = -1);
+    GlobalVariableInfo(llvm::GlobalVariable* GV, int seqNum = -1);
 
     // 获取全局变量类型描述
     std::string getGlobalVariableType() const;

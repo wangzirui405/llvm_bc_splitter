@@ -119,7 +119,7 @@ public:
     // 辅助方法
     bool hasModule() const { return module != nullptr; }
     size_t getFunctionCount() const { return functionMap.size(); }
-    bool writeBitcodeSafely(llvm::Module& mod, const std::string& filename);
+    bool writeBitcodeSafely(llvm::Module& M, const std::string& filename);
     std::string renameUnnamedGlobals(const std::string& filename);
     static bool matchesPattern(const std::string& filename, const std::string& pattern);
     bool copyByPattern(const std::string& pattern);
@@ -128,7 +128,7 @@ public:
     // 清空数据
     void clear();
     void findCyclicGroups();
-    std::unordered_set<llvm::Function*> getCyclicGroupsContainingFunction(llvm::Function* func);
+    std::unordered_set<llvm::Function*> getCyclicGroupsContainingFunction(llvm::Function* F);
     std::vector<std::set<int>> getGroupDependencies();
 
     // 函数名匹配相关方法
@@ -143,11 +143,11 @@ public:
     bool isFunctionNameCacheValid() const;
     size_t getFunctionNameCacheSize() const;
     void analyzeCallRelations();
-    llvm::Function* findFunctionFromUser(llvm::User* user);
-    llvm::Function* findFunctionForConstant(llvm::Constant* constant);
-    llvm::Function* findFunctionForConstantImpl(llvm::Constant* constant,
+    llvm::Function* findFunctionFromUser(llvm::User* U);
+    llvm::Function* findFunctionForConstant(llvm::Constant* C);
+    llvm::Function* findFunctionForConstantImpl(llvm::Constant* C,
                                                       std::unordered_set<llvm::Constant*>& visited);
-    llvm::Function* findFunctionFromUserImpl(llvm::User* user,
+    llvm::Function* findFunctionFromUserImpl(llvm::User* U,
                                                    std::unordered_set<llvm::User*>& visited);
 
 private:

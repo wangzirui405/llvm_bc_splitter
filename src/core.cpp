@@ -8,11 +8,11 @@
 #include "llvm/IR/Instructions.h"
 #include <sstream>
 
-FunctionInfo::FunctionInfo(llvm::Function* func, int seqNum) {
-    funcPtr = func;
-    name = func->getName().str();
-    isDeclaration = func->isDeclaration();  // 是否是声明
-    isDefinition = func->hasExactDefinition();  // 是否是定义
+FunctionInfo::FunctionInfo(llvm::Function* F, int seqNum) {
+    funcPtr = F;
+    name = F->getName().str();
+    isDeclaration = F->isDeclaration();  // 是否是声明
+    isDefinition = F->hasExactDefinition();  // 是否是定义
 
     // 更新LLVM相关属性
     updateAttributesFromLLVM();
@@ -275,22 +275,22 @@ std::string FunctionInfo::getBriefInfo() const {
 /**
  * 判断指定函数的调用者是否全部在指定的组中
  *
- * @param func 要检查的函数，该函数必须在group和functionMap中
+ * @param F 要检查的函数，该函数必须在group和functionMap中
  * @param group 函数组
  * @param functionMap 函数信息映射表
- * @return true 如果func的所有调用者都在group中
- * @return false 如果func有调用者不在group中
- * @throws std::invalid_argument 如果func不在group或functionMap中
+ * @return true 如果F的所有调用者都在group中
+ * @return false 如果F有调用者不在group中
+ * @throws std::invalid_argument 如果F不在group或functionMap中
  */
-bool FunctionInfo::areAllCallersInGroup(llvm::Function* func,
+bool FunctionInfo::areAllCallersInGroup(llvm::Function* F,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
     // 参数检查
-    if (group.find(func) == group.end()) {
+    if (group.find(F) == group.end()) {
         throw std::invalid_argument("Function must be in the group");
     }
 
-    auto funcInfoIt = functionMap.find(func);
+    auto funcInfoIt = functionMap.find(F);
     if (funcInfoIt == functionMap.end()) {
         throw std::invalid_argument("Function must be in functionMap");
     }
@@ -306,14 +306,14 @@ bool FunctionInfo::areAllCallersInGroup(llvm::Function* func,
     bool currentFuncProcessed = funcInfoIt->second.isProcessed;
 
     // 检查每个调用者是否都在group中，并检查 isProcessed 状态
-    for (llvm::Function* caller : callerFunctions) {
+    for (llvm::Function* callerF : callerFunctions) {
         // 检查调用者是否在group中
-        if (group.find(caller) == group.end()) {
+        if (group.find(callerF) == group.end()) {
             return false;  // 发现一个不在group中的调用者
         }
 
         // 检查调用者的 isProcessed 状态
-        auto callerInfoIt = functionMap.find(caller);
+        auto callerInfoIt = functionMap.find(callerF);
         if (callerInfoIt == functionMap.end()) {
             throw std::invalid_argument("Caller function must be in functionMap");
         }
@@ -332,22 +332,22 @@ bool FunctionInfo::areAllCallersInGroup(llvm::Function* func,
 /**
  * 判断指定函数的被调用者是否全部在指定的组中
  *
- * @param func 要检查的函数，该函数必须在group和functionMap中
+ * @param F 要检查的函数，该函数必须在group和functionMap中
  * @param group 函数组
  * @param functionMap 函数信息映射表
- * @return true 如果func的所有被调用者都在group中
- * @return false 如果func有被调用者不在group中
- * @throws std::invalid_argument 如果func不在group或functionMap中
+ * @return true 如果F的所有被调用者都在group中
+ * @return false 如果F有被调用者不在group中
+ * @throws std::invalid_argument 如果F不在group或functionMap中
  */
-bool FunctionInfo::areAllCalledsInGroup(llvm::Function* func,
+bool FunctionInfo::areAllCalledsInGroup(llvm::Function* F,
                          const std::unordered_set<llvm::Function*>& group,
                          const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
     // 参数检查
-    if (group.find(func) == group.end()) {
+    if (group.find(F) == group.end()) {
         throw std::invalid_argument("Function must be in the group");
     }
 
-    auto funcInfoIt = functionMap.find(func);
+    auto funcInfoIt = functionMap.find(F);
     if (funcInfoIt == functionMap.end()) {
         throw std::invalid_argument("Function must be in functionMap");
     }
@@ -363,14 +363,14 @@ bool FunctionInfo::areAllCalledsInGroup(llvm::Function* func,
     bool currentFuncProcessed = funcInfoIt->second.isProcessed;
 
     // 检查每个被调用者是否都在group中，并检查 isProcessed 状态
-    for (llvm::Function* called : calledFunctions) {
+    for (llvm::Function* calledF : calledFunctions) {
         // 检查被调用者是否在group中
-        if (group.find(called) == group.end()) {
+        if (group.find(calledF) == group.end()) {
             return false;  // 发现一个不在group中的被调用者
         }
 
         // 检查被调用者的 isProcessed 状态
-        auto calledInfoIt = functionMap.find(called);
+        auto calledInfoIt = functionMap.find(calledF);
         if (calledInfoIt == functionMap.end()) {
             throw std::invalid_argument("Called function must be in functionMap");
         }
@@ -386,11 +386,11 @@ bool FunctionInfo::areAllCalledsInGroup(llvm::Function* func,
     return true;  // 所有被调用者都在group中且isProcessed状态一致
 }
 
-GlobalVariableInfo::GlobalVariableInfo(llvm::GlobalVariable* gv, int seqNum) {
-    gvPtr = gv;
-    name = gv->getName().str();
-    isDeclaration = gv->isDeclaration();  // 是否是声明
-    isDefinition = gv->hasExactDefinition();  // 是否是定义
+GlobalVariableInfo::GlobalVariableInfo(llvm::GlobalVariable* GV, int seqNum) {
+    gvPtr = GV;
+    name = GV->getName().str();
+    isDeclaration = GV->isDeclaration();  // 是否是声明
+    isDefinition = GV->hasExactDefinition();  // 是否是定义
 
     // 更新LLVM相关属性
     updateAttributesFromLLVM();
