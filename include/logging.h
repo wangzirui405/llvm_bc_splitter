@@ -2,17 +2,17 @@
 #ifndef BC_SPLITTER_LOGGING_H
 #define BC_SPLITTER_LOGGING_H
 
-#include <iostream>
-#include <fstream>
-#include <string>
 #include "llvm/Support/raw_ostream.h"
+#include <fstream>
+#include <iostream>
+#include <string>
 
 class Logger {
-private:
+  private:
     std::ofstream logFile;
     std::string currentLogFile;
 
-public:
+  public:
     Logger();
     ~Logger();
 
@@ -24,11 +24,14 @@ public:
 
     // 独立日志文件支持
     std::ofstream createIndividualLogFile(llvm::StringRef bcFilename, llvm::StringRef suffix = "");
-    void logToIndividualLog(std::ofstream& individualLog, llvm::StringRef message, bool echoToMain = false);
+    void logToIndividualLog(std::ofstream &individualLog, llvm::StringRef message, bool echoToMain = false);
 
     // 日志配置
     bool isOpen() const { return logFile.is_open(); }
-    void close() { if (logFile.is_open()) logFile.close(); }
+    void close() {
+        if (logFile.is_open())
+            logFile.close();
+    }
 };
 
 #endif // BC_SPLITTER_LOGGING_H

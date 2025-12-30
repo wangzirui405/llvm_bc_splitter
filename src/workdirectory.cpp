@@ -1,10 +1,10 @@
 // workdirectory.cpp
 #include "workdirectory.h"
+#include <filesystem>
 #include <iostream>
 #include <regex>
-#include <filesystem>
 
-bool BCWorkDir::createWorkDirectory(const std::string& path) {
+bool BCWorkDir::createWorkDirectory(const std::string &path) {
     try {
         // 创建目录（递归创建）
         if (std::filesystem::create_directories(path)) {
@@ -17,7 +17,7 @@ bool BCWorkDir::createWorkDirectory(const std::string& path) {
             std::cerr << "无法创建工作目录: " << path << std::endl;
             return false;
         }
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "错误: " << e.what() << std::endl;
         return false;
     }
@@ -38,16 +38,10 @@ bool BCWorkDir::createWorkDirectoryStructure() {
     }
 
     // 子目录列表
-    std::vector<std::string> subDirs = {
-        "input",
-        "output",
-        "temp",
-        "logs",
-        "config"
-    };
+    std::vector<std::string> subDirs = {"input", "output", "temp", "logs", "config"};
 
     // 创建子目录
-    for (const auto& dir : subDirs) {
+    for (const auto &dir : subDirs) {
         std::string fullPath = workDir + dir;
         if (!createWorkDirectory(fullPath)) {
             std::cerr << "创建子目录失败: " << dir << std::endl;
@@ -59,12 +53,12 @@ bool BCWorkDir::createWorkDirectoryStructure() {
     return true;
 }
 
-void BCWorkDir::cleanupConfigFiles(const std::string& groupPrefix) {
+void BCWorkDir::cleanupConfigFiles(const std::string &groupPrefix) {
     try {
         // 清理两个目录
         std::vector<std::string> dirs = {config.workDir, config.bcWorkDir};
 
-        for (const auto& dir : dirs) {
+        for (const auto &dir : dirs) {
             if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
                 std::cerr << "Directory does not exist: " << dir << std::endl;
                 continue;
@@ -76,15 +70,13 @@ void BCWorkDir::cleanupConfigFiles(const std::string& groupPrefix) {
             std::regex pattern3(R"(response_group_[0-9]_with_dep\.txt$)");
             std::regex pattern4(R"(libkn.*\.so$)");
 
-            for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            for (const auto &entry : std::filesystem::directory_iterator(dir)) {
                 if (std::filesystem::is_regular_file(entry.status())) {
                     std::string filename = entry.path().filename().string();
 
                     // 检查是否匹配需要删除的模式
-                    if (std::regex_match(filename, pattern1) ||
-                        std::regex_match(filename, pattern2) ||
-                        std::regex_match(filename, pattern3) ||
-                        std::regex_match(filename, pattern4)) {
+                    if (std::regex_match(filename, pattern1) || std::regex_match(filename, pattern2) ||
+                        std::regex_match(filename, pattern3) || std::regex_match(filename, pattern4)) {
 
                         std::cout << "Deleting: " << entry.path() << std::endl;
                         std::filesystem::remove(entry.path());
@@ -99,14 +91,12 @@ void BCWorkDir::cleanupConfigFiles(const std::string& groupPrefix) {
 
         std::cout << "Cleanup completed." << std::endl;
 
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "Error during cleanup: " << e.what() << std::endl;
     }
 }
 
-bool BCWorkDir::endsWithSlash(const std::string& path) {
-    return !path.empty() && path.back() == '/';
-}
+bool BCWorkDir::endsWithSlash(const std::string &path) { return !path.empty() && path.back() == '/'; }
 
 bool BCWorkDir::checkAllPaths() {
     bool result = true;
@@ -114,30 +104,30 @@ bool BCWorkDir::checkAllPaths() {
 
     if (!endsWithSlash(config.workDir)) {
         std::cout << "1. workDir: " << config.workDir << " - "
-              << "✗" << std::endl;
+                  << "✗" << std::endl;
         result = false;
     }
 
     if (!endsWithSlash(config.workDir)) {
         std::cout << "2. relativeDir: " << config.relativeDir << " - "
-              << "✗" << std::endl;
+                  << "✗" << std::endl;
         result = false;
     }
     if (!endsWithSlash(config.workDir)) {
         std::cout << "3. bcWorkDir: " << config.bcWorkDir << " - "
-              << "✗" << std::endl;
+                  << "✗" << std::endl;
         result = false;
     }
     if (!endsWithSlash(config.workDir)) {
         std::cout << "4. workSpace: " << config.workSpace << " - "
-              << "✗" << std::endl;
+                  << "✗" << std::endl;
         result = false;
     }
 
     return result;
 }
 
-bool BCWorkDir::copyFileToWorkspace(const std::string& inputFile) {
+bool BCWorkDir::copyFileToWorkspace(const std::string &inputFile) {
     try {
         // 确保目标目录存在
         std::string targetDir = config.workSpace + "input/";
@@ -152,13 +142,13 @@ bool BCWorkDir::copyFileToWorkspace(const std::string& inputFile) {
         // 复制文件
         return copyFile(inputFile, destination);
 
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "复制文件到工作空间失败: " << e.what() << std::endl;
         return false;
     }
 }
 
-bool BCWorkDir::copyFile(const std::string& source, const std::string& destination, bool overwrite) {
+bool BCWorkDir::copyFile(const std::string &source, const std::string &destination, bool overwrite) {
     try {
         // 检查源文件是否存在
         if (!std::filesystem::exists(source) || !std::filesystem::is_regular_file(source)) {
@@ -184,10 +174,10 @@ bool BCWorkDir::copyFile(const std::string& source, const std::string& destinati
         std::cout << "文件复制成功: " << source << " -> " << destination << std::endl;
         return true;
 
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "文件复制失败: " << e.what() << std::endl;
         return false;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "未知错误: " << e.what() << std::endl;
         return false;
     }

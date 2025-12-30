@@ -1,40 +1,40 @@
-//linker.c
+// linker.c
 #include "linker.h"
 
 #include "common.h"
-#include "logging.h"
 #include "core.h"
+#include "logging.h"
 
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <vector>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <filesystem>
-#include <thread>
-#include <future>
-#include <regex>
-#include <algorithm>
-#include <mutex>
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/GlobalVariable.h"
-#include "llvm/IRReader/IRReader.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SetVector.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/IR/Verifier.h"
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-BCLinker::BCLinker(BCCommon& commonRef) : common(commonRef) {}
+BCLinker::BCLinker(BCCommon &commonRef) : common(commonRef) {}
 
 llvm::SmallVector<llvm::StringRef, 200> BCLinker::readResponseFile() {
     logger.log("读取原response文件...");
@@ -58,7 +58,7 @@ llvm::SmallVector<llvm::StringRef, 200> BCLinker::readResponseFile() {
 
 // 打印vector中所有GroupInfo的详细信息
 void BCLinker::printFileMapDetails() {
-    const auto& fileMap = common.getFileMap();
+    const auto &fileMap = common.getFileMap();
     std::stringstream ss;
     ss << "\n==================== File Map Details ====================";
     logger.log(ss.str());
@@ -77,10 +77,7 @@ void BCLinker::printFileMapDetails() {
 
     // 创建表格头
     ss.str("");
-    ss << std::left
-       << std::setw(10) << "Group ID"
-       << std::setw(25) << "BC File"
-       << std::setw(20) << "Has Demangle"
+    ss << std::left << std::setw(10) << "Group ID" << std::setw(25) << "BC File" << std::setw(20) << "Has Demangle"
        << "Dependencies";
     logger.log(ss.str());
 
@@ -88,7 +85,7 @@ void BCLinker::printFileMapDetails() {
 
     // 打印每个GroupInfo的信息
     for (size_t i = 0; i < fileMap.size(); ++i) {
-        const GroupInfo* info = fileMap[i];
+        const GroupInfo *info = fileMap[i];
         if (!info) {
             ss.str("");
             ss << "[" << i << "] NULL pointer";
@@ -98,11 +95,9 @@ void BCLinker::printFileMapDetails() {
 
         // 格式化输出
         ss.str("");
-        ss << std::left
-           << std::setw(10) << info->groupId
-           << std::setw(25) << (info->bcFile.length() > 23 ?
-                               info->bcFile.substr(0, 20) + "..." : info->bcFile)
-           << std::setw(20) << (info->hasKonanCxaDemangle ? "Yes" : "No");
+        ss << std::left << std::setw(10) << info->groupId << std::setw(25)
+           << (info->bcFile.length() > 23 ? info->bcFile.substr(0, 20) + "..." : info->bcFile) << std::setw(20)
+           << (info->hasKonanCxaDemangle ? "Yes" : "No");
 
         // 打印依赖项
         if (info->dependencies.empty()) {
@@ -110,7 +105,8 @@ void BCLinker::printFileMapDetails() {
         } else {
             bool first = true;
             for (int dep : info->dependencies) {
-                if (!first) ss << ", ";
+                if (!first)
+                    ss << ", ";
                 ss << dep;
                 first = false;
             }
@@ -123,7 +119,7 @@ void BCLinker::printFileMapDetails() {
     // 可选：打印每个GroupInfo的完整详细信息
     logger.log("\nDetailed Information for each group:");
     for (size_t i = 0; i < fileMap.size(); ++i) {
-        const GroupInfo* info = fileMap[i];
+        const GroupInfo *info = fileMap[i];
         if (info) {
             ss.str("");
             ss << "\n[Group " << i << "]: ";
@@ -140,7 +136,7 @@ void BCLinker::printFileMapDetails() {
 void BCLinker::generateInputFiles(llvm::StringRef outputPrefix) {
     logger.log("补全入参涉及的输入文件...");
 
-    const auto& fileMap = common.getFileMap();
+    const auto &fileMap = common.getFileMap();
     // 读取原始response文件
     auto originalLines = readResponseFile();
     if (originalLines.empty()) {
@@ -150,17 +146,17 @@ void BCLinker::generateInputFiles(llvm::StringRef outputPrefix) {
 
     // 为每个组生成两个版本
     for (int groupId = 0; groupId < fileMap.size(); groupId++) {
-        const auto& deps = fileMap[groupId]->dependencies;
+        const auto &deps = fileMap[groupId]->dependencies;
 
         // 版本1: 无依赖
         std::ofstream fileNoDep(std::filesystem::path(config.workDir) /
-                               ("response_group_" + std::to_string(groupId) + "_no_dep.txt"));
+                                ("response_group_" + std::to_string(groupId) + "_no_dep.txt"));
 
         // 版本2: 有依赖
         std::ofstream fileWithDep(std::filesystem::path(config.workDir) /
-                                 ("response_group_" + std::to_string(groupId) + "_with_dep.txt"));
+                                  ("response_group_" + std::to_string(groupId) + "_with_dep.txt"));
 
-        for (const auto& line : originalLines) {
+        for (const auto &line : originalLines) {
             std::string modifiedLine = line.str();
 
             // 修改soname
@@ -228,19 +224,19 @@ void BCLinker::generateInputFiles(llvm::StringRef outputPrefix) {
         fileNoDep.close();
         fileWithDep.close();
     }
-    //复制bc文件至工作目录
+    // 复制bc文件至工作目录
     if (!common.copyByPattern(outputPrefix)) {
         logger.logError("复制失败");
     }
-
 }
 
 bool BCLinker::executeLdLld(llvm::StringRef responseFilePath, llvm::StringRef extralCommand) {
     Logger logger;
     Config config;
     std::string command = "ld.lld @" + responseFilePath.str();
-    if (!extralCommand.empty()) command += " " + extralCommand.str();
-    //logger.log("---- 执行命令: " + command);
+    if (!extralCommand.empty())
+        command += " " + extralCommand.str();
+    // logger.log("---- 执行命令: " + command);
 
     // 创建日志文件路径
     std::filesystem::path responsePath(responseFilePath.str());
@@ -259,11 +255,13 @@ bool BCLinker::executeLdLld(llvm::StringRef responseFilePath, llvm::StringRef ex
 }
 
 // 处理单个组的两阶段任务
-void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
-    std::string responseFileNoDep = (std::filesystem::path(config.workDir) /
-                                   ("response_group_" + std::to_string(groupId) + "_no_dep.txt")).string();
-    std::string responseFileWithDep = (std::filesystem::path(config.workDir) /
-                                     ("response_group_" + std::to_string(groupId) + "_with_dep.txt")).string();
+void BCLinker::processGroupTask(int groupId, std::promise<bool> &promise) {
+    std::string responseFileNoDep =
+        (std::filesystem::path(config.workDir) / ("response_group_" + std::to_string(groupId) + "_no_dep.txt"))
+            .string();
+    std::string responseFileWithDep =
+        (std::filesystem::path(config.workDir) / ("response_group_" + std::to_string(groupId) + "_with_dep.txt"))
+            .string();
 
     bool success = true;
 
@@ -284,12 +282,12 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
 
     setPhase1Promise(groupId);
     // 等待依赖组的第一阶段完成
-    const auto& groups = common.getFileMap();
-    const auto& deps = groups[groupId]->dependencies;
+    const auto &groups = common.getFileMap();
+    const auto &deps = groups[groupId]->dependencies;
     if (!deps.empty()) {
         // {
-            // std::lock_guard<std::mutex> lock(logMutex);
-            // logger.log("-- 组 " + std::to_string(groupId) + ": 等待依赖组第一阶段完成");
+        // std::lock_guard<std::mutex> lock(logMutex);
+        // logger.log("-- 组 " + std::to_string(groupId) + ": 等待依赖组第一阶段完成");
         // }
 
         for (int depId : deps) {
@@ -300,8 +298,8 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
             } catch (...) {
                 // 如果等待失败，记录错误但继续
                 std::lock_guard<std::mutex> lock(logMutex);
-                logger.logWarning("-- 组 " + std::to_string(groupId) + ": 等待组 " +
-                                  std::to_string(depId) + " 第一阶段时发生异常");
+                logger.logWarning("-- 组 " + std::to_string(groupId) + ": 等待组 " + std::to_string(depId) +
+                                  " 第一阶段时发生异常");
             }
         }
     }
@@ -312,7 +310,7 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
     // }
 
     if (!executeLdLld(responseFileWithDep, "")) {
-    //if (!executeLdLld(responseFileWithDep, "--no-undefined")) {
+        // if (!executeLdLld(responseFileWithDep, "--no-undefined")) {
         success = false;
         std::lock_guard<std::mutex> lock(logMutex);
         logger.logWarning("---- 组 " + std::to_string(groupId) + " 第二阶段失败");
@@ -328,7 +326,7 @@ void BCLinker::processGroupTask(int groupId, std::promise<bool>& promise) {
 bool BCLinker::executeAllGroups() {
     logger.log("并发执行所有组的两阶段任务...");
 
-    auto& groups = common.getFileMap();
+    auto &groups = common.getFileMap();
     std::vector<std::thread> threads;
     std::vector<std::future<bool>> futures;
     std::vector<std::promise<bool>> promises(groups.size());
@@ -345,14 +343,12 @@ bool BCLinker::executeAllGroups() {
     idx = 0;
     for (int groupId = 0; groupId < groups.size(); groupId++) {
         // 使用lambda表达式捕获this指针
-        threads.emplace_back([this, groupId, &promises, idx]() {
-            this->processGroupTask(groupId, promises[idx]);
-        });
+        threads.emplace_back([this, groupId, &promises, idx]() { this->processGroupTask(groupId, promises[idx]); });
         idx++;
     }
 
     // 等待所有线程完成
-    for (auto& thread : threads) {
+    for (auto &thread : threads) {
         thread.join();
     }
 
@@ -365,7 +361,8 @@ bool BCLinker::executeAllGroups() {
             logger.logWarning("组[" + std::to_string(groupId) + "]处理失败");
         }
     }
-    if (allSuccess) logger.log("全部编译成功!");
+    if (allSuccess)
+        logger.log("全部编译成功!");
 
     return allSuccess;
 }
@@ -379,7 +376,7 @@ bool BCLinker::enterInWorkDir() {
     try {
         std::filesystem::current_path(config.workDir);
         logger.logToFile("切换到工作目录: " + config.workDir);
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         logger.logError("无法切换到工作目录: " + config.workDir + " - " + e.what());
         return false;
     }
@@ -392,7 +389,7 @@ bool BCLinker::returnCurrenPath() {
     try {
         std::filesystem::current_path(currenpath);
         logger.logToFile("切换回原始目录: " + currenpath);
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         logger.logError("无法切换回原始目录: " + currenpath + " - " + e.what());
         return false;
     }
@@ -401,7 +398,7 @@ bool BCLinker::returnCurrenPath() {
 }
 
 void BCLinker::initphase1() {
-    auto& fileMap = common.getFileMap();
+    auto &fileMap = common.getFileMap();
     for (int groupId = 0; groupId < fileMap.size(); groupId++) {
         auto promise = std::make_shared<std::promise<void>>();
         phase1Promises[groupId] = promise;
@@ -423,7 +420,7 @@ bool BCLinker::copySoFilesToOutput() {
 
         // 复制所有libkn_*.so文件
         size_t copiedCount = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(config.workDir)) {
+        for (const auto &entry : std::filesystem::directory_iterator(config.workDir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".so") {
                 std::string filename = entry.path().filename().string();
 
@@ -448,11 +445,11 @@ bool BCLinker::copySoFilesToOutput() {
         }
 
         return true;
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         std::lock_guard<std::mutex> lock(logMutex);
         logger.logError("复制so文件时出错: " + std::string(e.what()));
         return false;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::lock_guard<std::mutex> lock(logMutex);
         logger.logError("复制so文件时发生异常: " + std::string(e.what()));
         return false;
@@ -466,7 +463,7 @@ void BCLinker::setPhase1Promise(int groupId) {
     if (it != phase1Promises.end() && it->second) {
         try {
             it->second->set_value();
-        } catch (const std::future_error& e) {
+        } catch (const std::future_error &e) {
             // 如果promise已经被设置，忽略异常
             if (e.code() != std::future_errc::promise_already_satisfied) {
                 throw;

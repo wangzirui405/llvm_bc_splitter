@@ -1,16 +1,16 @@
 // main.cpp
-#include "splitter.h"
-#include "linker.h"
-#include "workdirectory.h"
-#include "logging.h"
-#include "verifier.h"
 #include "common.h"
+#include "linker.h"
+#include "logging.h"
+#include "splitter.h"
+#include "verifier.h"
+#include "workdirectory.h"
 
-#include <iostream>
 #include <filesystem>
+#include <iostream>
 #include <regex>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc < 3 || argc > 4) {
         std::cerr << "用法: " << argv[0] << " <输入.bc> <输出前缀> [--clone/clear]" << std::endl;
         std::cerr << "选项:" << std::endl;
@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
         }
 
         splitter.analyzeFunctions();
-        //splitter.analyzeInternalConstants();
+        // splitter.analyzeInternalConstants();
         splitter.printFunctionInfo();
         splitter.splitBCFiles(outputPrefix);
         // 批量验证
@@ -76,8 +76,8 @@ int main(int argc, char* argv[]) {
         // 生成报告
         splitter.generateGroupReport(outputPrefix);
 
-        //linker.printFileMapDetails();
-        //linker.readResponseFile();
+        // linker.printFileMapDetails();
+        // linker.readResponseFile();
         linker.generateInputFiles(outputPrefix);
         linker.enterInWorkDir();
         linker.initphase1();
@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
         linker.copySoFilesToOutput();
 
         logger.log("程序执行完成");
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "程序执行过程中发生异常: " << e.what() << std::endl;
         return 1;
     }

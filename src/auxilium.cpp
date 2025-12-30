@@ -1,93 +1,163 @@
 // auxilium.cpp
-#include "core.h"
 #include "common.h"
-#include <algorithm>
-#include <cctype>
+#include "core.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 
-void AttributeStats::addFunctionInfo(const FunctionInfo& funcInfo) {
+void AttributeStats::addFunctionInfo(const FunctionInfo &funcInfo) {
     // 统计链接属性
     switch (funcInfo.linkage) {
-        case EXTERNAL_LINKAGE: externalLinkage++; break;
-        case AVAILABLE_EXTERNALLY_LINKAGE: availableExternallyLinkage++; break;
-        case LINK_ONCE_ANY_LINKAGE: linkOnceAnyLinkage++; break;
-        case LINK_ONCE_ODR_LINKAGE: linkOnceODRLinkage++; break;
-        case WEAK_ANY_LINKAGE: weakAnyLinkage++; break;
-        case WEAK_ODR_LINKAGE: weakODRLinkage++; break;
-        case APPENDING_LINKAGE: appendingLinkage++; break;
-        case INTERNAL_LINKAGE: internalLinkage++; break;
-        case PRIVATE_LINKAGE: privateLinkage++; break;
-        case EXTERNAL_WEAK_LINKAGE: externalWeakLinkage++; break;
-        case COMMON_LINKAGE: commonLinkage++; break;
+    case EXTERNAL_LINKAGE:
+        externalLinkage++;
+        break;
+    case AVAILABLE_EXTERNALLY_LINKAGE:
+        availableExternallyLinkage++;
+        break;
+    case LINK_ONCE_ANY_LINKAGE:
+        linkOnceAnyLinkage++;
+        break;
+    case LINK_ONCE_ODR_LINKAGE:
+        linkOnceODRLinkage++;
+        break;
+    case WEAK_ANY_LINKAGE:
+        weakAnyLinkage++;
+        break;
+    case WEAK_ODR_LINKAGE:
+        weakODRLinkage++;
+        break;
+    case APPENDING_LINKAGE:
+        appendingLinkage++;
+        break;
+    case INTERNAL_LINKAGE:
+        internalLinkage++;
+        break;
+    case PRIVATE_LINKAGE:
+        privateLinkage++;
+        break;
+    case EXTERNAL_WEAK_LINKAGE:
+        externalWeakLinkage++;
+        break;
+    case COMMON_LINKAGE:
+        commonLinkage++;
+        break;
     }
 
     // 统计DSO本地
-    if (funcInfo.dsoLocal) dsoLocalCount++;
+    if (funcInfo.dsoLocal)
+        dsoLocalCount++;
 
     // 统计可见性
-    if (funcInfo.visibility == "Default") defaultVisibility++;
-    else if (funcInfo.visibility == "Hidden") hiddenVisibility++;
-    else if (funcInfo.visibility == "Protected") protectedVisibility++;
+    if (funcInfo.visibility == "Default")
+        defaultVisibility++;
+    else if (funcInfo.visibility == "Hidden")
+        hiddenVisibility++;
+    else if (funcInfo.visibility == "Protected")
+        protectedVisibility++;
 
     // 统计声明/定义
-    if (funcInfo.isDeclaration) declarations++;
-    if (funcInfo.isDefinition) definitions++;
+    if (funcInfo.isDeclaration)
+        declarations++;
+    if (funcInfo.isDefinition)
+        definitions++;
 
     // 统计有名/无名
-    if (funcInfo.isUnnamed()) unnamedFunctions++;
-    else namedFunctions++;
+    if (funcInfo.isUnnamed())
+        unnamedFunctions++;
+    else
+        namedFunctions++;
 
     // 统计链接类型分组
-    if (funcInfo.isExternal) externalFunctions++;
-    if (funcInfo.isInternal) internalFunctions++;
-    if (funcInfo.isWeak) weakFunctions++;
-    if (funcInfo.isLinkOnce) linkOnceFunctions++;
+    if (funcInfo.isExternal)
+        externalFunctions++;
+    if (funcInfo.isInternal)
+        internalFunctions++;
+    if (funcInfo.isWeak)
+        weakFunctions++;
+    if (funcInfo.isLinkOnce)
+        linkOnceFunctions++;
 
-    if (funcInfo.isCompilerGenerated()) compilerGenerated++;
+    if (funcInfo.isCompilerGenerated())
+        compilerGenerated++;
 }
 
-void AttributeStats::addGlobalVariableInfo(const GlobalVariableInfo& globalVariableInfo) {
+void AttributeStats::addGlobalVariableInfo(const GlobalVariableInfo &globalVariableInfo) {
     // 统计链接属性
     switch (globalVariableInfo.linkage) {
-        case EXTERNAL_LINKAGE: externalLinkage++; break;
-        case AVAILABLE_EXTERNALLY_LINKAGE: availableExternallyLinkage++; break;
-        case LINK_ONCE_ANY_LINKAGE: linkOnceAnyLinkage++; break;
-        case LINK_ONCE_ODR_LINKAGE: linkOnceODRLinkage++; break;
-        case WEAK_ANY_LINKAGE: weakAnyLinkage++; break;
-        case WEAK_ODR_LINKAGE: weakODRLinkage++; break;
-        case APPENDING_LINKAGE: appendingLinkage++; break;
-        case INTERNAL_LINKAGE: internalLinkage++; break;
-        case PRIVATE_LINKAGE: privateLinkage++; break;
-        case EXTERNAL_WEAK_LINKAGE: externalWeakLinkage++; break;
-        case COMMON_LINKAGE: commonLinkage++; break;
+    case EXTERNAL_LINKAGE:
+        externalLinkage++;
+        break;
+    case AVAILABLE_EXTERNALLY_LINKAGE:
+        availableExternallyLinkage++;
+        break;
+    case LINK_ONCE_ANY_LINKAGE:
+        linkOnceAnyLinkage++;
+        break;
+    case LINK_ONCE_ODR_LINKAGE:
+        linkOnceODRLinkage++;
+        break;
+    case WEAK_ANY_LINKAGE:
+        weakAnyLinkage++;
+        break;
+    case WEAK_ODR_LINKAGE:
+        weakODRLinkage++;
+        break;
+    case APPENDING_LINKAGE:
+        appendingLinkage++;
+        break;
+    case INTERNAL_LINKAGE:
+        internalLinkage++;
+        break;
+    case PRIVATE_LINKAGE:
+        privateLinkage++;
+        break;
+    case EXTERNAL_WEAK_LINKAGE:
+        externalWeakLinkage++;
+        break;
+    case COMMON_LINKAGE:
+        commonLinkage++;
+        break;
     }
 
     // 统计DSO本地
-    if (globalVariableInfo.dsoLocal) dsoLocalCount++;
+    if (globalVariableInfo.dsoLocal)
+        dsoLocalCount++;
 
     // 统计可见性
-    if (globalVariableInfo.visibility == "Default") defaultVisibility++;
-    else if (globalVariableInfo.visibility == "Hidden") hiddenVisibility++;
-    else if (globalVariableInfo.visibility == "Protected") protectedVisibility++;
+    if (globalVariableInfo.visibility == "Default")
+        defaultVisibility++;
+    else if (globalVariableInfo.visibility == "Hidden")
+        hiddenVisibility++;
+    else if (globalVariableInfo.visibility == "Protected")
+        protectedVisibility++;
 
     // 统计声明/定义
-    if (globalVariableInfo.isDeclaration) declarations++;
-    if (globalVariableInfo.isDefinition) definitions++;
+    if (globalVariableInfo.isDeclaration)
+        declarations++;
+    if (globalVariableInfo.isDefinition)
+        definitions++;
 
     // 统计有名/无名
-    if (globalVariableInfo.isUnnamed()) unnamedGlobalVariables++;
-    else namedGlobalVariables++;
+    if (globalVariableInfo.isUnnamed())
+        unnamedGlobalVariables++;
+    else
+        namedGlobalVariables++;
 
     // 统计链接类型分组
-    if (globalVariableInfo.isExternal) externalGlobalVariables++;
-    if (globalVariableInfo.isInternal) internalGlobalVariables++;
-    if (globalVariableInfo.isWeak) weakGlobalVariables++;
-    if (globalVariableInfo.isLinkOnce) linkOnceGlobalVariables++;
+    if (globalVariableInfo.isExternal)
+        externalGlobalVariables++;
+    if (globalVariableInfo.isInternal)
+        internalGlobalVariables++;
+    if (globalVariableInfo.isWeak)
+        weakGlobalVariables++;
+    if (globalVariableInfo.isLinkOnce)
+        linkOnceGlobalVariables++;
 
-    if (globalVariableInfo.isCompilerGenerated()) compilerGenerated++;
+    if (globalVariableInfo.isCompilerGenerated())
+        compilerGenerated++;
 }
 
 std::string AttributeStats::getFunctionsLinkageSummary() const {

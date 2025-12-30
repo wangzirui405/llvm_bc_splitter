@@ -2,67 +2,67 @@
 #ifndef BC_SPLITTER_CORE_H
 #define BC_SPLITTER_CORE_H
 
-#include <string>
-#include <unordered_set>
-#include <unordered_map>
-#include <vector>
-#include <queue>
-#include <memory>
-#include <functional>
-#include <cstdint>
 #include "llvm/IR/Function.h"
-#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <queue>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 // 链接类型枚举（与LLVM对应）
 enum LinkageType {
-    EXTERNAL_LINKAGE = 0,           ///< 外部可见
-    AVAILABLE_EXTERNALLY_LINKAGE,   ///< 可用于检查，但不发出
-    LINK_ONCE_ANY_LINKAGE,          ///< 链接时保留一个副本（内联）
-    LINK_ONCE_ODR_LINKAGE,          ///< 相同，但仅被等效内容替换
-    WEAK_ANY_LINKAGE,               ///< 链接时保留一个命名副本（弱）
-    WEAK_ODR_LINKAGE,               ///< 相同，但仅被等效内容替换
-    APPENDING_LINKAGE,              ///< 特殊用途，仅适用于全局数组
-    INTERNAL_LINKAGE,               ///< 链接时重命名冲突（静态）
-    PRIVATE_LINKAGE,                ///< 类似于内部链接，但从符号表中省略
-    EXTERNAL_WEAK_LINKAGE,          ///< 外部弱链接
-    COMMON_LINKAGE                  ///< 暂定定义
+    EXTERNAL_LINKAGE = 0,         ///< 外部可见
+    AVAILABLE_EXTERNALLY_LINKAGE, ///< 可用于检查，但不发出
+    LINK_ONCE_ANY_LINKAGE,        ///< 链接时保留一个副本（内联）
+    LINK_ONCE_ODR_LINKAGE,        ///< 相同，但仅被等效内容替换
+    WEAK_ANY_LINKAGE,             ///< 链接时保留一个命名副本（弱）
+    WEAK_ODR_LINKAGE,             ///< 相同，但仅被等效内容替换
+    APPENDING_LINKAGE,            ///< 特殊用途，仅适用于全局数组
+    INTERNAL_LINKAGE,             ///< 链接时重命名冲突（静态）
+    PRIVATE_LINKAGE,              ///< 类似于内部链接，但从符号表中省略
+    EXTERNAL_WEAK_LINKAGE,        ///< 外部弱链接
+    COMMON_LINKAGE                ///< 暂定定义
 };
 
 // 函数信息结构体
 struct FunctionInfo {
     std::string name;
     std::string displayName;
-    llvm::Function* funcPtr = nullptr;
+    llvm::Function *funcPtr = nullptr;
     int outDegree = 0;
     int inDegree = 0;
     int groupIndex = -1;
     bool isProcessed = false;
     bool isReferencedByGlobals = false;
-    int sequenceNumber = -1;  // 只有无名函数才有序号，有名函数为-1
+    int sequenceNumber = -1; // 只有无名函数才有序号，有名函数为-1
 
     // 新增的属性
-    LinkageType linkage = EXTERNAL_LINKAGE;  // 链接属性
-    std::string linkageString;               // 链接属性字符串表示
-    bool dsoLocal = false;                   // DSO本地属性
-    std::string visibility;                  // 可见性属性
-    bool isDeclaration = false;              // 是否是声明（没有函数体）
-    bool isDefinition = false;               // 是否是定义（有函数体）
-    bool isExternal = false;                 // 是否外部链接
-    bool isInternal = false;                 // 是否内部链接
-    bool isWeak = false;                     // 是否弱链接
-    bool isLinkOnce = false;                 // 是否LinkOnce链接
-    bool isCommon = false;                   // 是否Common链接
+    LinkageType linkage = EXTERNAL_LINKAGE; // 链接属性
+    std::string linkageString;              // 链接属性字符串表示
+    bool dsoLocal = false;                  // DSO本地属性
+    std::string visibility;                 // 可见性属性
+    bool isDeclaration = false;             // 是否是声明（没有函数体）
+    bool isDefinition = false;              // 是否是定义（有函数体）
+    bool isExternal = false;                // 是否外部链接
+    bool isInternal = false;                // 是否内部链接
+    bool isWeak = false;                    // 是否弱链接
+    bool isLinkOnce = false;                // 是否LinkOnce链接
+    bool isCommon = false;                  // 是否Common链接
 
     // 函数使用信息
-    llvm::DenseSet<llvm::Function*> callerFunctions;
-    llvm::DenseSet<llvm::Function*> calledFunctions;
-    llvm::DenseSet<llvm::Function*> personalityCalledFunctions;      // personality函数（异常处理函数）
-    llvm::DenseSet<llvm::Function*> personalityCallerFunctions;
+    llvm::DenseSet<llvm::Function *> callerFunctions;
+    llvm::DenseSet<llvm::Function *> calledFunctions;
+    llvm::DenseSet<llvm::Function *> personalityCalledFunctions; // personality函数（异常处理函数）
+    llvm::DenseSet<llvm::Function *> personalityCallerFunctions;
 
     FunctionInfo() = default;
-    FunctionInfo(llvm::Function* F, int seqNum = -1);
+    FunctionInfo(llvm::Function *F, int seqNum = -1);
 
     // 获取函数类型描述
     std::string getFunctionType() const;
@@ -89,45 +89,42 @@ struct FunctionInfo {
     // 从LLVM函数更新属性
     void updateAttributesFromLLVM();
     // 判断指定函数的调用者是否全部在指定的组中
-    static bool areAllCallersInGroup(llvm::Function* F,
-                         const llvm::DenseSet<llvm::Function*>& group,
-                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap);
+    static bool areAllCallersInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
+                                     const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap);
     // 判断指定函数的被调用者是否全部在指定的组中
-    static bool areAllCalledsInGroup(llvm::Function* F,
-                         const llvm::DenseSet<llvm::Function*>& group,
-                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap);
-
+    static bool areAllCalledsInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
+                                     const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap);
 };
 
 // 全局变量信息结构体
 struct GlobalVariableInfo {
     std::string name;
     std::string displayName;
-    llvm::GlobalVariable* gvPtr = nullptr;
+    llvm::GlobalVariable *gvPtr = nullptr;
     int groupIndex = -1;
     bool isProcessed = false;
-    int sequenceNumber = -1;  // 只有无名全局变量才有序号，有名全局变量为-1
+    int sequenceNumber = -1; // 只有无名全局变量才有序号，有名全局变量为-1
 
     // 新增的属性
-    LinkageType linkage = EXTERNAL_LINKAGE;  // 链接属性
-    std::string linkageString;               // 链接属性字符串表示
-    bool dsoLocal = false;                   // DSO本地属性
-    std::string visibility;                  // 可见性属性
-    bool isConstant = false;                 // 是否是常量
-    bool isDeclaration = false;              // 是否是声明
-    bool isDefinition = false;               // 是否是定义
-    bool isExternal = false;                 // 是否外部链接
-    bool isInternal = false;                 // 是否内部链接
-    bool isWeak = false;                     // 是否弱链接
-    bool isLinkOnce = false;                 // 是否LinkOnce链接
-    bool isCommon = false;                   // 是否Common链接
+    LinkageType linkage = EXTERNAL_LINKAGE; // 链接属性
+    std::string linkageString;              // 链接属性字符串表示
+    bool dsoLocal = false;                  // DSO本地属性
+    std::string visibility;                 // 可见性属性
+    bool isConstant = false;                // 是否是常量
+    bool isDeclaration = false;             // 是否是声明
+    bool isDefinition = false;              // 是否是定义
+    bool isExternal = false;                // 是否外部链接
+    bool isInternal = false;                // 是否内部链接
+    bool isWeak = false;                    // 是否弱链接
+    bool isLinkOnce = false;                // 是否LinkOnce链接
+    bool isCommon = false;                  // 是否Common链接
 
     // 全局变量使用信息
-    llvm::DenseSet<llvm::Function*> calleds;
-    llvm::DenseSet<llvm::Function*> callers;
+    llvm::DenseSet<llvm::Function *> calleds;
+    llvm::DenseSet<llvm::Function *> callers;
 
     GlobalVariableInfo() = default;
-    GlobalVariableInfo(llvm::GlobalVariable* GV, int seqNum = -1);
+    GlobalVariableInfo(llvm::GlobalVariable *GV, int seqNum = -1);
 
     // 获取全局变量类型描述
     std::string getGlobalVariableType() const;
@@ -153,14 +150,10 @@ struct GlobalVariableInfo {
     bool isUnnamed() const;
     // 从LLVM全局变量更新属性
     void updateAttributesFromLLVM();
-
 };
 
 // 分组模式枚举
-enum SplitMode {
-    MANUAL_MODE,
-    CLONE_MODE
-};
+enum SplitMode { MANUAL_MODE, CLONE_MODE };
 
 // 属性统计结构体
 struct AttributeStats {
@@ -201,12 +194,12 @@ struct AttributeStats {
 
     int compilerGenerated = 0;
 
-public:
+  public:
     AttributeStats() = default;
     ~AttributeStats() = default;
 
-    void addFunctionInfo(const FunctionInfo& funcInfo);
-    void addGlobalVariableInfo(const GlobalVariableInfo& globalVariableInfo);
+    void addFunctionInfo(const FunctionInfo &funcInfo);
+    void addGlobalVariableInfo(const GlobalVariableInfo &globalVariableInfo);
     std::string getFunctionsSummary() const;
     std::string getFunctionsLinkageSummary() const;
     std::string getGlobalVariablesSummary() const;

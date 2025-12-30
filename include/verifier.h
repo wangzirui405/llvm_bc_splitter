@@ -2,28 +2,28 @@
 #ifndef BC_SPLITTER_VERIFIER_H
 #define BC_SPLITTER_VERIFIER_H
 
-#include <string>
-#include <fstream>
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/GlobalVariable.h"
-#include "llvm/IRReader/IRReader.h"
-#include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/IR/Verifier.h"
+#include "common.h"
 #include "core.h"
 #include "logging.h"
-#include "common.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
+#include <fstream>
+#include <string>
 
 class BCVerifier {
-private:
+  private:
     Logger logger;
-    BCCommon& common;  // 引用共享数据
+    BCCommon &common; // 引用共享数据
     Config config;
 
     // 辅助函数
@@ -32,27 +32,24 @@ private:
     std::string getVisibilityString(llvm::GlobalValue::VisibilityTypes visibility);
 
     // 函数名映射构建
-    void buildFunctionNameMapsWithLog(const llvm::DenseSet<llvm::Function*>& group,
-                                    llvm::StringMap<llvm::Function*>& nameToFunc,
-                                    llvm::StringMap<std::string>& escapedToOriginal,
-                                    std::ofstream& individualLog);
+    void buildFunctionNameMapsWithLog(const llvm::DenseSet<llvm::Function *> &group,
+                                      llvm::StringMap<llvm::Function *> &nameToFunc,
+                                      llvm::StringMap<std::string> &escapedToOriginal, std::ofstream &individualLog);
 
-public:
-    BCVerifier(BCCommon& commonRef);
+  public:
+    BCVerifier(BCCommon &commonRef);
 
     // 核心验证方法
-    bool verifyFunctionSignature(llvm::Function* F);
+    bool verifyFunctionSignature(llvm::Function *F);
     bool quickValidateBCFile(llvm::StringRef filename);
-    bool quickValidateBCFileWithLog(llvm::StringRef filename, std::ofstream& individualLog);
+    bool quickValidateBCFileWithLog(llvm::StringRef filename, std::ofstream &individualLog);
 
     // 错误分析和修复
-    llvm::StringSet<> analyzeVerifierErrorsWithLog(
-        llvm::StringRef verifyOutput,
-        const llvm::DenseSet<llvm::Function*>& group,
-        std::ofstream& individualLog);
+    llvm::StringSet<> analyzeVerifierErrorsWithLog(llvm::StringRef verifyOutput,
+                                                   const llvm::DenseSet<llvm::Function *> &group,
+                                                   std::ofstream &individualLog);
 
-    bool verifyAndFixBCFile(llvm::StringRef filename,
-                          const llvm::DenseSet<llvm::Function*>& expectedGroup);
+    bool verifyAndFixBCFile(llvm::StringRef filename, const llvm::DenseSet<llvm::Function *> &expectedGroup);
 
     // 批量验证
     void validateAllBCFiles(llvm::StringRef outputPrefix, bool isCloneMode);
@@ -61,13 +58,10 @@ public:
     void analyzeBCFileContent(llvm::StringRef filename);
 
     // 重命名和修复
-    bool recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::Function*>& group,
-                                         const llvm::StringSet<>& externalFuncNames,
-                                         llvm::StringRef filename,
-                                         int groupIndex);
-    void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& M,
-                                                 const llvm::StringSet<>& externalFuncNames);
-
+    bool recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::Function *> &group,
+                                           const llvm::StringSet<> &externalFuncNames, llvm::StringRef filename,
+                                           int groupIndex);
+    void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module &M, const llvm::StringSet<> &externalFuncNames);
 };
 
 #endif // BC_SPLITTER_VERIFIER_H

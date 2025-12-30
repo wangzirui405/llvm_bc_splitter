@@ -1,19 +1,21 @@
 // logging.cpp
 #include "logging.h"
 #include "common.h"
-#include <iostream>
-#include <fstream>
-#include <string>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
 
 Logger::Logger() {
     Config config;
     logFile.open(config.workSpace + "logs/bc_splitter.log", std::ios::out | std::ios::app);
-    if (!logFile.is_open()) std::cerr << "警告: 无法打开日志文件" << std::endl;
+    if (!logFile.is_open())
+        std::cerr << "警告: 无法打开日志文件" << std::endl;
 }
 
 Logger::~Logger() {
-    if (logFile.is_open()) logFile.close();
+    if (logFile.is_open())
+        logFile.close();
 }
 
 void Logger::log(llvm::StringRef message) {
@@ -64,7 +66,7 @@ std::ofstream Logger::createIndividualLogFile(llvm::StringRef bcFilename, llvm::
     return individualLog;
 }
 
-void Logger::logToIndividualLog(std::ofstream& individualLog, llvm::StringRef message, bool echoToMain) {
+void Logger::logToIndividualLog(std::ofstream &individualLog, llvm::StringRef message, bool echoToMain) {
     if (individualLog.is_open()) {
         individualLog << message.str() << std::endl;
     }

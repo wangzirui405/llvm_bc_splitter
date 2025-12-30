@@ -1,37 +1,35 @@
 #include "common.h"
 
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/GlobalVariable.h"
-#include "llvm/IRReader/IRReader.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/Transforms/Utils/Cloning.h"  // 包含 CloneModule 和 ValueToValueMapTy
-#include "llvm/IR/ValueMap.h"              // ValueToValueMapTy 的详细定义
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/Support/MemoryBuffer.h>
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/ValueMap.h" // ValueToValueMapTy 的详细定义
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/IR/Verifier.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SetVector.h"
-#include <stack>
+#include "llvm/Transforms/Utils/Cloning.h" // 包含 CloneModule 和 ValueToValueMapTy
 #include <filesystem>
-
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <stack>
 
 // 打印单个GroupInfo的详细信息
 void GroupInfo::printDetails() const {
     std::cout << "========== GroupInfo Details ==========" << std::endl;
     std::cout << "Group ID: " << groupId << std::endl;
     std::cout << "BC File: " << bcFile << std::endl;
-    std::cout << "Has Konan Cxa Demangle: "
-              << (hasKonanCxaDemangle ? "true" : "false") << std::endl;
+    std::cout << "Has Konan Cxa Demangle: " << (hasKonanCxaDemangle ? "true" : "false") << std::endl;
 
     // 打印依赖项
     std::cout << "Dependencies (" << dependencies.size() << "): ";
@@ -40,7 +38,8 @@ void GroupInfo::printDetails() const {
     } else {
         bool first = true;
         for (int dep : dependencies) {
-            if (!first) std::cout << ", ";
+            if (!first)
+                std::cout << ", ";
             std::cout << dep;
             first = false;
         }
@@ -51,9 +50,7 @@ void GroupInfo::printDetails() const {
 
 BCCommon::BCCommon() : context(nullptr) {}
 
-BCCommon::~BCCommon() {
-    clear();
-}
+BCCommon::~BCCommon() { clear(); }
 
 void BCCommon::clear() {
     module.reset();
@@ -66,9 +63,11 @@ void BCCommon::clear() {
 }
 
 bool BCCommon::isNumberString(llvm::StringRef str) {
-    if (str.empty()) return false;
+    if (str.empty())
+        return false;
     for (char c : str) {
-        if (!std::isdigit(c)) return false;
+        if (!std::isdigit(c))
+            return false;
     }
     return true;
 }
@@ -79,7 +78,7 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
     llvm::SMDiagnostic err;
     std::string newfilename = "renamed_" + filename.str();
     // 创建新的上下文
-    llvm::LLVMContext* context = new llvm::LLVMContext();
+    llvm::LLVMContext *context = new llvm::LLVMContext();
 
     auto M = llvm::parseIRFile(filename, err, *context);
     // 克隆模块
@@ -91,12 +90,11 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
     unsigned globalAliasCounter = 0;
 
     // 第一步：重命名全局变量
-    for (auto& GV : newM->globals()) {
+    for (auto &GV : newM->globals()) {
         std::string oldName = GV.getName().str();
 
         // 检查是否未命名或名称以数字开头（通常是未命名的情况）
-        if (oldName.empty() ||
-            (oldName[0] >= '0' && oldName[0] <= '9')) {
+        if (oldName.empty() || (oldName[0] >= '0' && oldName[0] <= '9')) {
 
             // 跳过以"llvm."开头的特殊全局变量
             if (oldName.substr(0, 5) == "llvm.") {
@@ -113,17 +111,16 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
 
             // 直接重命名
             GV.setName(newName);
-            //std::cout << "Renamed global variable: " << oldName << " -> " << newName << std::endl;
+            // std::cout << "Renamed global variable: " << oldName << " -> " << newName << std::endl;
         }
     }
 
     // 第二步：重命名函数
-    for (auto& F : newM->functions()) {
+    for (auto &F : newM->functions()) {
         std::string oldName = F.getName().str();
 
         // 检查是否未命名或名称以数字开头
-        if (oldName.empty() ||
-            (oldName[0] >= '0' && oldName[0] <= '9')) {
+        if (oldName.empty() || (oldName[0] >= '0' && oldName[0] <= '9')) {
 
             // 跳过LLVM内部函数
             if (oldName.substr(0, 5) == "llvm.") {
@@ -140,16 +137,15 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
 
             // 直接重命名
             F.setName(newName);
-            //std::cout << "Renamed function: " << oldName << " -> " << newName << std::endl;
+            // std::cout << "Renamed function: " << oldName << " -> " << newName << std::endl;
         }
     }
 
     // 第三步：重命名全局别名
-    for (auto& GA : newM->aliases()) {
+    for (auto &GA : newM->aliases()) {
         std::string oldName = GA.getName().str();
 
-        if (oldName.empty() ||
-            (oldName[0] >= '0' && oldName[0] <= '9')) {
+        if (oldName.empty() || (oldName[0] >= '0' && oldName[0] <= '9')) {
 
             // 生成新名称
             std::string newName = "renamed_alias_" + std::to_string(globalAliasCounter++);
@@ -161,7 +157,7 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
 
             // 直接重命名
             GA.setName(newName);
-            //std::cout << "Renamed alias: " << oldName << " -> " << newName << std::endl;
+            // std::cout << "Renamed alias: " << oldName << " -> " << newName << std::endl;
         }
     }
     writeBitcodeSafely(*newM, newfilename);
@@ -169,7 +165,7 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
 }
 
 // 安全的bitcode写入方法
-bool BCCommon::writeBitcodeSafely(llvm::Module& M, llvm::StringRef filename) {
+bool BCCommon::writeBitcodeSafely(llvm::Module &M, llvm::StringRef filename) {
     logger.logToFile("安全写入bitcode: " + filename.str());
 
     std::error_code ec;
@@ -184,7 +180,7 @@ bool BCCommon::writeBitcodeSafely(llvm::Module& M, llvm::StringRef filename) {
         outFile.close();
         logger.log("成功写入: " + filename.str());
         return true;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         logger.logError("写入bitcode时发生异常: " + std::string(e.what()));
         llvm::sys::fs::remove(filename);
         return false;
@@ -207,17 +203,17 @@ void BCCommon::findCyclicGroups() {
     }
 
     // 构建调用图
-    llvm::DenseMap<llvm::Function*, llvm::DenseSet<llvm::Function*>> callGraph;
-    llvm::DenseMap<llvm::Function*, int> indices;
-    llvm::DenseMap<llvm::Function*, int> lowlinks;
-    llvm::DenseMap<llvm::Function*, bool> onStack;
-    std::stack<llvm::Function*> stack;
+    llvm::DenseMap<llvm::Function *, llvm::DenseSet<llvm::Function *>> callGraph;
+    llvm::DenseMap<llvm::Function *, int> indices;
+    llvm::DenseMap<llvm::Function *, int> lowlinks;
+    llvm::DenseMap<llvm::Function *, bool> onStack;
+    std::stack<llvm::Function *> stack;
     int index = 0;
 
     // 初始化调用图
-    for (auto& pair : functionMap) {
-        llvm::Function* F = pair.first;
-        callGraph[F] = llvm::DenseSet<llvm::Function*>();
+    for (auto &pair : functionMap) {
+        llvm::Function *F = pair.first;
+        callGraph[F] = llvm::DenseSet<llvm::Function *>();
 
         // 添加直接调用关系
         for (auto calledFunc : pair.second.calledFunctions) {
@@ -228,8 +224,8 @@ void BCCommon::findCyclicGroups() {
     }
 
     // Tarjan算法实现
-    std::function<void(llvm::Function*)> strongConnect;
-    strongConnect = [&](llvm::Function* v) {
+    std::function<void(llvm::Function *)> strongConnect;
+    strongConnect = [&](llvm::Function *v) {
         indices[v] = index;
         lowlinks[v] = index;
         index++;
@@ -250,8 +246,8 @@ void BCCommon::findCyclicGroups() {
 
         // 如果v是强连通分量的根
         if (lowlinks[v] == indices[v]) {
-            llvm::DenseSet<llvm::Function*> scc;
-            llvm::Function* w;
+            llvm::DenseSet<llvm::Function *> scc;
+            llvm::Function *w;
             do {
                 w = stack.top();
                 stack.pop();
@@ -269,15 +265,15 @@ void BCCommon::findCyclicGroups() {
                     functionToGroupMap[F].push_back(groupIndex);
                 }
 
-                //logger.logToFile("Found cyclic group " + std::to_string(groupIndex) +
-                //           " with " + std::to_string(scc.size()) + " functions");
+                // logger.logToFile("Found cyclic group " + std::to_string(groupIndex) +
+                //            " with " + std::to_string(scc.size()) + " functions");
             }
         }
     };
 
     // 对每个未访问的函数执行算法
-    for (auto& pair : functionMap) {
-        llvm::Function* F = pair.first;
+    for (auto &pair : functionMap) {
+        llvm::Function *F = pair.first;
         if (indices.find(F) == indices.end()) {
             strongConnect(F);
         }
@@ -292,24 +288,23 @@ void BCCommon::findCyclicGroups() {
  * @return 包含该函数的所有循环调用组（每个组是一个函数集合）
  */
 
-llvm::DenseSet<llvm::Function*> BCCommon::getCyclicGroupsContainingFunction(llvm::Function* F) {
+llvm::DenseSet<llvm::Function *> BCCommon::getCyclicGroupsContainingFunction(llvm::Function *F) {
     if (!F) {
         logger.logWarning("查询时提供的函数指针为空。");
-        return llvm::DenseSet<llvm::Function*>();
+        return llvm::DenseSet<llvm::Function *>();
     }
 
     auto it = functionToGroupMap.find(F);
     if (it == functionToGroupMap.end()) {
-        return llvm::DenseSet<llvm::Function*>();
+        return llvm::DenseSet<llvm::Function *>();
     }
 
-    llvm::DenseSet<llvm::Function*> allRelatedFuncs;
+    llvm::DenseSet<llvm::Function *> allRelatedFuncs;
 
     // 收集所有相关函数
     for (int groupIndex : it->second) {
         if (groupIndex >= 0 && groupIndex < cyclicGroups.size()) {
-            allRelatedFuncs.insert(cyclicGroups[groupIndex].begin(),
-                                   cyclicGroups[groupIndex].end());
+            allRelatedFuncs.insert(cyclicGroups[groupIndex].begin(), cyclicGroups[groupIndex].end());
         }
     }
 
@@ -324,10 +319,10 @@ llvm::DenseSet<llvm::Function*> BCCommon::getCyclicGroupsContainingFunction(llvm
  *         如果calledFunctions中的函数不在functionMap中，跳过该函数
  */
 llvm::SmallVector<llvm::SmallSetVector<int, 32>, 32> BCCommon::getGroupDependencies() {
-    auto& functionMap = getFunctionMap();
+    auto &functionMap = getFunctionMap();
 
     int maxGroupIndex = -1;
-    for (const auto& pair : functionMap) {
+    for (const auto &pair : functionMap) {
         maxGroupIndex = std::max(maxGroupIndex, pair.second.groupIndex);
     }
 
@@ -339,14 +334,14 @@ llvm::SmallVector<llvm::SmallSetVector<int, 32>, 32> BCCommon::getGroupDependenc
     llvm::SmallVector<llvm::SmallSetVector<int, 32>, 32> groupDependencies;
     groupDependencies.resize(maxGroupIndex + 1);
 
-    for (const auto& pair : functionMap) {
-        const FunctionInfo& funcInfo = pair.second;
+    for (const auto &pair : functionMap) {
+        const FunctionInfo &funcInfo = pair.second;
 
         if (funcInfo.groupIndex < 0) {
             continue;
         }
 
-        for (llvm::Function* calledF : funcInfo.calledFunctions) {
+        for (llvm::Function *calledF : funcInfo.calledFunctions) {
             auto calledIt = functionMap.find(calledF);
             if (calledIt != functionMap.end()) {
                 int groupIdx = calledIt->second.groupIndex;
@@ -361,16 +356,13 @@ llvm::SmallVector<llvm::SmallSetVector<int, 32>, 32> BCCommon::getGroupDependenc
 }
 
 // 当functionMap被外部修改时调用此方法
-void BCCommon::invalidateFunctionNameCache() {
-    functionNameMatcher.invalidateCache();
-}
+void BCCommon::invalidateFunctionNameCache() { functionNameMatcher.invalidateCache(); }
 
 // 重建函数名缓存
 void BCCommon::rebuildFunctionNameCache() {
     if (!functionMap.empty()) {
         functionNameMatcher.rebuildCache(functionMap);
-        logger.log("记录：已缓存" +
-                  std::to_string(functionNameMatcher.getCacheSize()) + "个名字");
+        logger.log("记录：已缓存" + std::to_string(functionNameMatcher.getCacheSize()) + "个名字");
     }
 }
 
@@ -393,7 +385,7 @@ llvm::StringSet<> BCCommon::getMatchingFunctionNames(llvm::StringRef str) {
     auto matches = functionNameMatcher.getMatchingFunctions(str);
 
     llvm::StringSet<> result;
-    for (const auto& entry : matches) {
+    for (const auto &entry : matches) {
         llvm::StringRef key = entry.getKey();
         if (str.find(key) != llvm::StringRef::npos) {
             result.insert(key);
@@ -403,47 +395,44 @@ llvm::StringSet<> BCCommon::getMatchingFunctionNames(llvm::StringRef str) {
 }
 
 // 获取匹配的函数指针列表
-llvm::DenseSet<llvm::Function*> BCCommon::getMatchingFunctions(llvm::StringRef str) {
+llvm::DenseSet<llvm::Function *> BCCommon::getMatchingFunctions(llvm::StringRef str) {
     ensureCacheValid();
     auto matches = functionNameMatcher.getMatchingFunctions(str);
 
-    llvm::DenseSet<llvm::Function*> result;
-    for (const auto& match : matches) {
+    llvm::DenseSet<llvm::Function *> result;
+    for (const auto &match : matches) {
         result.insert(match.second);
     }
     return result;
 }
 
 // 获取首个匹配的函数指针
-llvm::Function* BCCommon::getFirstMatchingFunction(llvm::StringRef str) {
+llvm::Function *BCCommon::getFirstMatchingFunction(llvm::StringRef str) {
     ensureCacheValid();
     auto matches = functionNameMatcher.getMatchingFunctions(str);
 
-    llvm::Function* resultF;
-    for (const auto& match : matches) {
+    llvm::Function *resultF;
+    for (const auto &match : matches) {
         resultF = match.second;
     }
     return resultF;
 }
 
 // 获取缓存状态
-bool BCCommon::isFunctionNameCacheValid() const {
-    return functionNameMatcher.isCacheValid();
-}
+bool BCCommon::isFunctionNameCacheValid() const { return functionNameMatcher.isCacheValid(); }
 
-size_t BCCommon::getFunctionNameCacheSize() const {
-    return functionNameMatcher.getCacheSize();
-}
+size_t BCCommon::getFunctionNameCacheSize() const { return functionNameMatcher.getCacheSize(); }
 
 void BCCommon::analyzeCallRelations() {
     // 首先遍历所有函数
-    for (llvm::Function& F : *module) {
-        if (F.isDeclaration()) continue;
+    for (llvm::Function &F : *module) {
+        if (F.isDeclaration())
+            continue;
 
         // 获取personality函数
         if (F.hasPersonalityFn()) {
-            if (auto* personality = F.getPersonalityFn()) {
-                if (auto* personalityF = llvm::dyn_cast<llvm::Function>(personality)) {
+            if (auto *personality = F.getPersonalityFn()) {
+                if (auto *personalityF = llvm::dyn_cast<llvm::Function>(personality)) {
                     if (functionMap.count(&F) && functionMap.count(personalityF)) {
                         // 记录personality函数调用关系
                         functionMap[&F].personalityCalledFunctions.insert(personalityF);
@@ -457,37 +446,35 @@ void BCCommon::analyzeCallRelations() {
             continue;
         }
 
-        FunctionInfo& funcInfo = functionMap[&F];
+        FunctionInfo &funcInfo = functionMap[&F];
 
         // 1. 遍历该函数的使用者，收集调用者信息（入度）
         // 使用一个临时集合来避免在遍历过程中修改users
-        llvm::SmallPtrSet<llvm::User*, 32> users;
+        llvm::SmallPtrSet<llvm::User *, 32> users;
 
-        for (llvm::Use& use : F.uses()) {
-            if (llvm::User* U = use.getUser()) {
+        for (llvm::Use &use : F.uses()) {
+            if (llvm::User *U = use.getUser()) {
                 users.insert(U);
             }
         }
 
-        for (llvm::User* U : users) {
-            if (!U) continue;
+        for (llvm::User *U : users) {
+            if (!U)
+                continue;
 
             // 尝试从user中找到其所在的函数
-            llvm::Function* callerF = nullptr;
+            llvm::Function *callerF = nullptr;
 
             // 首先检查user本身是否是函数
-            if (llvm::Function* F = llvm::dyn_cast<llvm::Function>(U)) {
+            if (llvm::Function *F = llvm::dyn_cast<llvm::Function>(U)) {
                 callerF = F;
-            }
-            else if (llvm::Instruction* I = llvm::dyn_cast<llvm::Instruction>(U)) {
+            } else if (llvm::Instruction *I = llvm::dyn_cast<llvm::Instruction>(U)) {
                 // 如果user是指令，获取指令所在的函数
                 callerF = I->getFunction();
-            }
-            else if (llvm::BasicBlock* BB = llvm::dyn_cast<llvm::BasicBlock>(U)) {
+            } else if (llvm::BasicBlock *BB = llvm::dyn_cast<llvm::BasicBlock>(U)) {
                 // 如果user是基本块，获取基本块所在的函数
                 callerF = BB->getParent();
-            }
-            else if (llvm::Constant* C = llvm::dyn_cast<llvm::Constant>(U)) {
+            } else if (llvm::Constant *C = llvm::dyn_cast<llvm::Constant>(U)) {
                 // 对于常量使用，需要向上查找其所在的函数
                 callerF = findFunctionForConstant(C);
             }
@@ -502,61 +489,64 @@ void BCCommon::analyzeCallRelations() {
                 funcInfo.callerFunctions.insert(callerF);
 
                 // 同时更新调用者的出度信息
-                FunctionInfo& callerInfo = functionMap[callerF];
+                FunctionInfo &callerInfo = functionMap[callerF];
                 callerInfo.calledFunctions.insert(&F);
             }
         }
 
         // 2. 遍历函数体，收集被调用函数信息（出度）
-        for (llvm::BasicBlock& BB : F) {
-            for (llvm::Instruction& I : BB) {
+        for (llvm::BasicBlock &BB : F) {
+            for (llvm::Instruction &I : BB) {
                 // 处理调用指令
-                if (llvm::CallInst* callInst = llvm::dyn_cast<llvm::CallInst>(&I)) {
-                    llvm::Value* calledValue = callInst->getCalledOperand();
-                    if (!calledValue) continue;
+                if (llvm::CallInst *callInst = llvm::dyn_cast<llvm::CallInst>(&I)) {
+                    llvm::Value *calledValue = callInst->getCalledOperand();
+                    if (!calledValue)
+                        continue;
 
                     // 剥离指针转换
                     calledValue = calledValue->stripPointerCasts();
 
                     // 检查是否是函数
-                    if (llvm::Function* calledF = llvm::dyn_cast<llvm::Function>(calledValue)) {
+                    if (llvm::Function *calledF = llvm::dyn_cast<llvm::Function>(calledValue)) {
                         if (functionMap.count(calledF)) {
                             funcInfo.calledFunctions.insert(calledF);
 
                             // 同时更新被调用者的入度信息
-                            FunctionInfo& calledInfo = functionMap[calledF];
+                            FunctionInfo &calledInfo = functionMap[calledF];
                             calledInfo.callerFunctions.insert(&F);
                         }
                     }
                 }
                 // 处理调用指令的变体（如InvokeInst）
-                else if (llvm::InvokeInst* invokeInst = llvm::dyn_cast<llvm::InvokeInst>(&I)) {
-                    llvm::Value* calledValue = invokeInst->getCalledOperand();
-                    if (!calledValue) continue;
+                else if (llvm::InvokeInst *invokeInst = llvm::dyn_cast<llvm::InvokeInst>(&I)) {
+                    llvm::Value *calledValue = invokeInst->getCalledOperand();
+                    if (!calledValue)
+                        continue;
 
                     // 剥离指针转换
                     calledValue = calledValue->stripPointerCasts();
 
-                    if (llvm::Function* calledF = llvm::dyn_cast<llvm::Function>(calledValue)) {
+                    if (llvm::Function *calledF = llvm::dyn_cast<llvm::Function>(calledValue)) {
                         if (functionMap.count(calledF)) {
                             funcInfo.calledFunctions.insert(calledF);
 
-                            FunctionInfo& calledInfo = functionMap[calledF];
+                            FunctionInfo &calledInfo = functionMap[calledF];
                             calledInfo.callerFunctions.insert(&F);
                         }
                     }
                 }
                 // 处理函数地址的存储操作
-                else if (llvm::StoreInst* storeInst = llvm::dyn_cast<llvm::StoreInst>(&I)) {
-                    llvm::Value* value = storeInst->getValueOperand();
-                    if (!value) continue;
+                else if (llvm::StoreInst *storeInst = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+                    llvm::Value *value = storeInst->getValueOperand();
+                    if (!value)
+                        continue;
 
                     value = value->stripPointerCasts();
-                    if (llvm::Function* storedF = llvm::dyn_cast<llvm::Function>(value)) {
+                    if (llvm::Function *storedF = llvm::dyn_cast<llvm::Function>(value)) {
                         if (functionMap.count(storedF)) {
                             funcInfo.calledFunctions.insert(storedF);
 
-                            FunctionInfo& storedInfo = functionMap[storedF];
+                            FunctionInfo &storedInfo = functionMap[storedF];
                             storedInfo.callerFunctions.insert(&F);
                         }
                     }
@@ -565,15 +555,16 @@ void BCCommon::analyzeCallRelations() {
                 else {
                     // 遍历指令的所有操作数
                     for (unsigned i = 0; i < I.getNumOperands(); i++) {
-                        llvm::Value* operand = I.getOperand(i);
-                        if (!operand) continue;
+                        llvm::Value *operand = I.getOperand(i);
+                        if (!operand)
+                            continue;
 
                         operand = operand->stripPointerCasts();
-                        if (llvm::Function* operandF = llvm::dyn_cast<llvm::Function>(operand)) {
+                        if (llvm::Function *operandF = llvm::dyn_cast<llvm::Function>(operand)) {
                             if (functionMap.count(operandF)) {
                                 funcInfo.calledFunctions.insert(operandF);
 
-                                FunctionInfo& operandInfo = functionMap[operandF];
+                                FunctionInfo &operandInfo = functionMap[operandF];
                                 operandInfo.callerFunctions.insert(&F);
                             }
                         }
@@ -584,44 +575,43 @@ void BCCommon::analyzeCallRelations() {
     }
 
     // 3. 遍历所有函数，统计入度和出度
-    for (auto& pair : functionMap) {
-        FunctionInfo& funcInfo = pair.second;
+    for (auto &pair : functionMap) {
+        FunctionInfo &funcInfo = pair.second;
         funcInfo.inDegree = funcInfo.callerFunctions.size();
         funcInfo.outDegree = funcInfo.calledFunctions.size();
     }
 }
 
 // 辅助函数：从常量中查找其所在的函数
-llvm::Function* BCCommon::findFunctionForConstant(llvm::Constant* C) {
-    if (!C) return nullptr;
+llvm::Function *BCCommon::findFunctionForConstant(llvm::Constant *C) {
+    if (!C)
+        return nullptr;
 
     // 使用集合记录已访问的常量，避免无限递归
-    llvm::DenseSet<llvm::Constant*> visited;
+    llvm::DenseSet<llvm::Constant *> visited;
     return findFunctionForConstantImpl(C, visited);
 }
 
-llvm::Function* BCCommon::findFunctionForConstantImpl(llvm::Constant* C,
-                                                      llvm::DenseSet<llvm::Constant*>& visited) {
+llvm::Function *BCCommon::findFunctionForConstantImpl(llvm::Constant *C, llvm::DenseSet<llvm::Constant *> &visited) {
     if (!C || !visited.insert(C).second) {
         return nullptr;
     }
 
     // 遍历常量的所有使用者
-    for (llvm::User* U : C->users()) {
-        if (!U) continue;
+    for (llvm::User *U : C->users()) {
+        if (!U)
+            continue;
 
-        if (llvm::Instruction* I = llvm::dyn_cast<llvm::Instruction>(U)) {
-            if (llvm::Function* F = I->getFunction()) {
+        if (llvm::Instruction *I = llvm::dyn_cast<llvm::Instruction>(U)) {
+            if (llvm::Function *F = I->getFunction()) {
                 return F;
             }
-        }
-        else if (llvm::Constant* constUser = llvm::dyn_cast<llvm::Constant>(U)) {
+        } else if (llvm::Constant *constUser = llvm::dyn_cast<llvm::Constant>(U)) {
             // 递归查找
-            if (llvm::Function* F = findFunctionForConstantImpl(constUser, visited)) {
+            if (llvm::Function *F = findFunctionForConstantImpl(constUser, visited)) {
                 return F;
             }
-        }
-        else if (llvm::GlobalVariable* GV = llvm::dyn_cast<llvm::GlobalVariable>(U)) {
+        } else if (llvm::GlobalVariable *GV = llvm::dyn_cast<llvm::GlobalVariable>(U)) {
             // 对于全局变量，我们可能需要查看哪些函数使用这个全局变量
             // 这里简单返回nullptr，或者可以进一步处理
             continue;
@@ -631,33 +621,31 @@ llvm::Function* BCCommon::findFunctionForConstantImpl(llvm::Constant* C,
 }
 
 // 辅助函数：从任意User中查找其所在的函数
-llvm::Function* BCCommon::findFunctionFromUser(llvm::User* U) {
-    if (!U) return nullptr;
+llvm::Function *BCCommon::findFunctionFromUser(llvm::User *U) {
+    if (!U)
+        return nullptr;
 
-    llvm::DenseSet<llvm::User*> visited;
+    llvm::DenseSet<llvm::User *> visited;
     return findFunctionFromUserImpl(U, visited);
 }
 
-llvm::Function* BCCommon::findFunctionFromUserImpl(llvm::User* U,
-                                                   llvm::DenseSet<llvm::User*>& visited) {
+llvm::Function *BCCommon::findFunctionFromUserImpl(llvm::User *U, llvm::DenseSet<llvm::User *> &visited) {
     if (!U || !visited.insert(U).second) {
         return nullptr;
     }
 
     // 尝试获取user的父节点
-    if (llvm::Instruction* I = llvm::dyn_cast<llvm::Instruction>(U)) {
+    if (llvm::Instruction *I = llvm::dyn_cast<llvm::Instruction>(U)) {
         return I->getFunction();
-    }
-    else if (llvm::BasicBlock* BB = llvm::dyn_cast<llvm::BasicBlock>(U)) {
+    } else if (llvm::BasicBlock *BB = llvm::dyn_cast<llvm::BasicBlock>(U)) {
         return BB->getParent();
-    }
-    else if (llvm::Function* F = llvm::dyn_cast<llvm::Function>(U)) {
+    } else if (llvm::Function *F = llvm::dyn_cast<llvm::Function>(U)) {
         return F;
     }
 
     // 对于其他类型的User，尝试查找其使用者链
-    for (llvm::User* userOfUser : U->users()) {
-        if (llvm::Function* F = findFunctionFromUserImpl(userOfUser, visited)) {
+    for (llvm::User *userOfUser : U->users()) {
+        if (llvm::Function *F = findFunctionFromUserImpl(userOfUser, visited)) {
             return F;
         }
     }
@@ -665,16 +653,17 @@ llvm::Function* BCCommon::findFunctionFromUserImpl(llvm::User* U,
     return nullptr;
 }
 
-void FunctionNameMatcher::rebuildCache(const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap) {
+void FunctionNameMatcher::rebuildCache(const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap) {
     std::lock_guard<std::mutex> lock(cacheMutex);
 
     nameCache.clear();
-    for (const auto& [F, info] : functionMap) {
+    for (const auto &[F, info] : functionMap) {
         if (!info.displayName.empty()) {
             nameCache.insert({info.displayName, F});
         }
     }
-    if (functionMap.size() > 100) cacheValid = true;
+    if (functionMap.size() > 100)
+        cacheValid = true;
 }
 
 void FunctionNameMatcher::invalidateCache() {
@@ -689,7 +678,7 @@ bool FunctionNameMatcher::containsFunctionName(llvm::StringRef str) {
         return false;
     }
 
-    for (const auto& entry : nameCache) {
+    for (const auto &entry : nameCache) {
         llvm::StringRef key = entry.getKey();
         if (str.find(key) != llvm::StringRef::npos) {
             return true;
@@ -698,17 +687,17 @@ bool FunctionNameMatcher::containsFunctionName(llvm::StringRef str) {
     return false;
 }
 
-llvm::StringMap<llvm::Function*> FunctionNameMatcher::getMatchingFunctions(llvm::StringRef str) {
+llvm::StringMap<llvm::Function *> FunctionNameMatcher::getMatchingFunctions(llvm::StringRef str) {
     std::lock_guard<std::mutex> lock(cacheMutex);
-    llvm::StringMap<llvm::Function*> results;
+    llvm::StringMap<llvm::Function *> results;
 
     if (!cacheValid || nameCache.empty()) {
         return results;
     }
 
-    for (const auto& entry : nameCache) {
+    for (const auto &entry : nameCache) {
         llvm::StringRef key = entry.getKey();
-        llvm::Function* value = entry.getValue();
+        llvm::Function *value = entry.getValue();
         if (str.find(key) != llvm::StringRef::npos) {
             results[key] = value;
         }
@@ -727,8 +716,7 @@ bool BCCommon::matchesPattern(llvm::StringRef filename, llvm::StringRef pattern)
     }
 
     // 使用 endswith 检查后缀
-    return (filename.find(pattern) != llvm::StringRef::npos) &&
-           filename.ends_with(".bc");
+    return (filename.find(pattern) != llvm::StringRef::npos) && filename.ends_with(".bc");
 }
 
 bool BCCommon::copyByPattern(llvm::StringRef pattern) {
@@ -736,7 +724,7 @@ bool BCCommon::copyByPattern(llvm::StringRef pattern) {
 
     try {
         // 遍历源目录
-        for (const auto& entry : std::filesystem::directory_iterator(config.workSpace + "output")) {
+        for (const auto &entry : std::filesystem::directory_iterator(config.workSpace + "output")) {
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().filename().string();
 
@@ -745,13 +733,13 @@ bool BCCommon::copyByPattern(llvm::StringRef pattern) {
                     std::filesystem::path destFile = std::filesystem::path(config.bcWorkDir) / filename;
 
                     std::filesystem::copy_file(entry.path(), destFile,
-                                  std::filesystem::copy_options::overwrite_existing);
+                                               std::filesystem::copy_options::overwrite_existing);
 
                     anyCopied = true;
                 }
             }
         }
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "遍历目录失败: " << e.what() << std::endl;
         return false;
     }
