@@ -20,6 +20,10 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"  // 包含 CloneModule 和 ValueToValueMapTy
 #include "llvm/IR/ValueMap.h"              // ValueToValueMapTy 的详细定义
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SetVector.h"
 #include <algorithm>
 #include <queue>
 #include <cstdlib>
@@ -59,8 +63,8 @@ void BCModuleSplitter::setCloneMode(bool enable) {
     logger.log("设置拆分模式: " + std::string(enable ? "CLONE_MODE" : "MANUAL_MODE"));
 }
 
-bool BCModuleSplitter::loadBCFile(const std::string& filename) {
-    logger.log("加载BC文件: " + filename);
+bool BCModuleSplitter::loadBCFile(llvm::StringRef filename) {
+    logger.log("加载BC文件: " + filename.str());
     llvm::SMDiagnostic err;
     std::string newfilename = config.workSpace + "output/" + common.renameUnnamedGlobals(filename);
 
@@ -103,9 +107,9 @@ void BCModuleSplitter::analyzeFunctions() {
         // 只有无名全局变量才分配序号
         int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
 
-        auto result = globalVariableMap.emplace(&GV, GlobalVariableInfo(&GV, seqNum));
+        auto result = globalVariableMap.insert({&GV, GlobalVariableInfo(&GV, seqNum)});
         if (result.second) {
-            globalVariablePtrs.push_back(&GV);
+            globalVariablePtrs.insert(&GV);
         }
     }
     logger.log("收集到 " + std::to_string(globalVariableMap.size()) + " 个全局变量");
@@ -121,9 +125,9 @@ void BCModuleSplitter::analyzeFunctions() {
         // 只有无名函数才分配序号
         int seqNum = isUnnamed ? unnamedSequenceNumber++ : -1;
 
-        auto result = functionMap.emplace(&F, FunctionInfo(&F, seqNum));
+        auto result = functionMap.insert({&F, FunctionInfo(&F, seqNum)});
         if (result.second) {
-            functionPtrs.push_back(&F);
+            functionPtrs.insert(&F);
         }
     }
 
@@ -133,7 +137,7 @@ void BCModuleSplitter::analyzeFunctions() {
     // 分析调用关系
     common.analyzeCallRelations();
 
-    std::unordered_set<llvm::Function*> internalFunctionsFromGlobals = collectInternalFunctionsFromGlobals();
+    llvm::DenseSet<llvm::Function*> internalFunctionsFromGlobals = collectInternalFunctionsFromGlobals();
     for (llvm::Function* F : internalFunctionsFromGlobals) {
         functionMap[F].isReferencedByGlobals = true;
     }
@@ -157,12 +161,12 @@ void BCModuleSplitter::printFunctionInfo() {
 }
 
 // 统计全局变量中引用的internal函数
-std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFromGlobals() {
-    std::unordered_set<llvm::Function*> internalFuncsInGlobals;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFromGlobals() {
+    llvm::DenseSet<llvm::Function*> internalFuncsInGlobals;
     llvm::Module* M = common.getModule();
 
     // 首先，收集所有internal函数
-    std::unordered_set<llvm::Function*> internalFuncs;
+    llvm::DenseSet<llvm::Function*> internalFuncs;
     for (llvm::Function& F : *M) {
         if (F.isDeclaration()) continue;
         if (F.hasInternalLinkage() || F.hasPrivateLinkage()) {
@@ -174,7 +178,7 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFr
     for (llvm::GlobalVariable& GV : M->globals()) {
         if (GV.hasInitializer()) {
             llvm::Constant* initializer = GV.getInitializer();
-            std::unordered_set<llvm::Function*> funcsInInitializer;
+            llvm::DenseSet<llvm::Function*> funcsInInitializer;
             if (auto* GA = llvm::dyn_cast<llvm::GlobalAlias>(initializer)) {
                 if (auto* aliasee = GA->getAliasee()) {
                     collectFunctionsFromConstant(aliasee, funcsInInitializer);
@@ -195,7 +199,7 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::collectInternalFunctionsFr
     return internalFuncsInGlobals;
 }
 
-void BCModuleSplitter::collectFunctionsFromConstant(llvm::Constant* C, std::unordered_set<llvm::Function*>& funcSet) {
+void BCModuleSplitter::collectFunctionsFromConstant(llvm::Constant* C, llvm::DenseSet<llvm::Function*>& funcSet) {
     if (auto* F = llvm::dyn_cast<llvm::Function>(C)) {
         funcSet.insert(F);
     } else if (auto* CE = llvm::dyn_cast<llvm::ConstantExpr>(C)) {
@@ -234,7 +238,7 @@ void BCModuleSplitter::analyzeInternalConstants() {
     std::string reportFile = "analyzeInternalConstants.txt";
     auto& globalVariableMap = common.getGlobalVariableMap();
     const auto& functionMap = common.getFunctionMap();
-    std::unordered_set<llvm::Function*> funcsUsingConstant;
+    llvm::DenseSet<llvm::Function*> funcsUsingConstant;
 
     if (functionMap.empty()) {
         logger.logError("未初始化");
@@ -247,7 +251,7 @@ void BCModuleSplitter::analyzeInternalConstants() {
 
     for (auto& pair : globalVariableMap) {
         GlobalVariableInfo& gv = pair.second;
-        std::set<llvm::User*> visited;
+        llvm::DenseSet<llvm::User*> visited;
         if (gv.isInternal && gv.isConstant) {
             for (llvm::User *U : pair.first->users()) {
                 // 递归查找最终的使用指令
@@ -275,7 +279,7 @@ void BCModuleSplitter::analyzeInternalConstants() {
 
 // 递归查找并记录使用位置
 void BCModuleSplitter::findAndRecordUsage(llvm::User *user,
-    GlobalVariableInfo &info, std::set<llvm::User*> visited) {
+    GlobalVariableInfo &info, llvm::DenseSet<llvm::User*> visited) {
 
     // 检查空指针
     if (!user) return;
@@ -309,9 +313,9 @@ void BCModuleSplitter::findAndRecordUsage(llvm::User *user,
 }
 
 // 更新后的生成分组报告方法，添加最终拆分完成后的bc文件的各个链接属性和可见性
-void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
-    std::string reportFile = outputPrefix + "_group_report.txt";
-    const std::string pathPre = config.workSpace + "output/";
+void BCModuleSplitter::generateGroupReport(llvm::StringRef outputPrefix) {
+    std::string reportFile = outputPrefix.str() + "_group_report.txt";
+    std::string pathPre = config.workSpace + "output/";
     auto& functionMap = common.getFunctionMap();
     auto& globalVariableMap = common.getGlobalVariableMap();
     std::ofstream report(config.workSpace + "logs/" + reportFile);
@@ -329,7 +333,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     report << "使用模式: " << (BCModuleSplitter::currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE") << std::endl << std::endl;
 
     // 按组统计
-    std::unordered_map<int,  std::vector<std::string>> groupFunctions;
+    llvm::DenseMap<int, llvm::SmallVector<std::string, 32>> groupFunctions;
 
     int ungroupedCount = 0;
 
@@ -348,7 +352,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     }
 
     // 定义所有可能的BC文件组
-     std::vector<std::pair<std::string, int>> bcFiles = {
+    llvm::SmallVector<std::pair<llvm::StringRef, int>, 4> bcFiles = {
         {"_group_globals.bc", 0},
         {"_group_external.bc", 1},
         {"_group_high_in_degree.bc", 2},
@@ -357,7 +361,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     for (int i = 0; i <= 9; i++ ) {
         if (i >= 4) bcFiles.emplace_back("_group_" + std::to_string(i) + ".bc", i);
-        std::string filename = outputPrefix + bcFiles[i].first;
+        std::string filename = (outputPrefix + bcFiles[i].first).str();
 
         if (!llvm::sys::fs::exists(pathPre + filename)) continue;
 
@@ -382,8 +386,8 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     if (groupFunctions.count(1)) {
         report << "组 1 (外部链接函数组):" << std::endl;
         int count = 0;
-        for (const std::string& funcName : groupFunctions[1]) {
-            report << "  " << std::to_string(++count) << ", " << funcName << std::endl;
+        for (llvm::StringRef funcName : groupFunctions[1]) {
+            report << "  " << std::to_string(++count) << ", " << funcName.str() << std::endl;
         }
         report << "总计: " << groupFunctions[1].size() << " 个函数" << std::endl << std::endl;
     }
@@ -392,8 +396,8 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     if (groupFunctions.count(2)) {
         report << "组 2 (高入度函数):" << std::endl;
         int count = 0;
-        for (const std::string& funcName : groupFunctions[2]) {
-            report << "  " << std::to_string(++count) << ". " << funcName << std::endl;
+        for (llvm::StringRef funcName : groupFunctions[2]) {
+            report << "  " << std::to_string(++count) << ". " << funcName.str() << std::endl;
         }
         report << "总计: " << groupFunctions[2].size() << " 个函数" << std::endl << std::endl;
     }
@@ -402,8 +406,8 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     if (groupFunctions.count(3)) {
         report << "组 3 (孤立函数):" << std::endl;
         int count = 0;
-        for (const std::string& funcName : groupFunctions[3]) {
-            report << "  " << std::to_string(++count) << ". " << funcName << std::endl;
+        for (llvm::StringRef funcName : groupFunctions[3]) {
+            report << "  " << std::to_string(++count) << ". " << funcName.str() << std::endl;
         }
         report << "总计: " << groupFunctions[3].size() << " 个函数" << std::endl << std::endl;
     }
@@ -414,8 +418,8 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         if (groupFunctions.count(i)) {
             report << "剩余自由分配组(" << i << "): " << std::endl;
             int count = 0;
-            for (const std::string& funcName : groupFunctions[i]) {
-                report << "  " << std::to_string(++count) << ". " << funcName << std::endl;
+            for (llvm::StringRef funcName : groupFunctions[i]) {
+                report << "  " << std::to_string(++count) << ". " << funcName.str() << std::endl;
             }
             report << "总计: " << groupFunctions[i].size() << " 个函数" << std::endl << std::endl;
         }
@@ -463,7 +467,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
         // 统计信息
         AttributeStats globalVariableStatistics = AttributeStats();
         AttributeStats functionStatistics = AttributeStats();
-        std::vector<std::set<int>> dependendGroupInfo = common.getGroupDependencies();
+        llvm::SmallVector<llvm::SmallSetVector<int, 32>, 32> dependendGroupInfo = common.getGroupDependencies();
 
         // 分析全局变量（仅对组0）
         if (groupIndex == 0) {
@@ -479,7 +483,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
                 globalVariableStatistics.addGlobalVariableInfo(tempGVInfo);
             }
             for (int i = 1; i < fileMap.size(); i++) {
-                fileMap[0]->dependencies.emplace(i);
+                fileMap[0]->dependencies.insert(i);
             }
             report << "  总计: " << globalVarCount << " 个全局变量" << std::endl;
 
@@ -507,7 +511,7 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
             for (int dependGroupIndex : dependendGroupInfo[groupIndex])
             {
                 report << "  组[" << groupIndex << "]依赖组[" << dependGroupIndex << "]" << std::endl;
-                fileMap[groupIndex]->dependencies.emplace(dependGroupIndex);
+                fileMap[groupIndex]->dependencies.insert(dependGroupIndex);
             }
 
             report << "  总计: " << totalFuncs << " 个函数" << std::endl;
@@ -533,21 +537,21 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
 
     int totalBCFiles = 0;
     int validBCFiles = 0;
-    std::vector<std::string> existingFiles;
+    llvm::StringSet<> existingFiles;
 
     // 检查文件是否存在并统计
     for (const auto& bcFileInfo : fileMap) {
         std::string filename = bcFileInfo->bcFile;
         if (llvm::sys::fs::exists(pathPre + filename)) {
             totalBCFiles++;
-            existingFiles.push_back(filename);
+            existingFiles.insert(filename);
         }
     }
 
     report << "生成的BC文件总数: " << totalBCFiles << std::endl;
     report << "存在的BC文件列表:" << std::endl;
     for (const auto& file : existingFiles) {
-        report << "  " << file << std::endl;
+        report << "  " << file.getKey().str() << std::endl;
     }
 
     report << std::endl << "=== 报告生成完成 ===" << std::endl;
@@ -560,12 +564,12 @@ void BCModuleSplitter::generateGroupReport(const std::string& outputPrefix) {
     // 同时在日志中输出关键统计信息
     logger.log("最终拆分完成: 共生成 " + std::to_string(totalBCFiles) + " 个BC文件");
     for (const auto& file : existingFiles) {
-        logger.log("  - " + file);
+        logger.log("  - " + file.getKey().str());
     }
 }
 
-std::vector<llvm::Function*> BCModuleSplitter::getUnprocessedExternalFunctions() {
-    std::vector<llvm::Function*> externalFuncs;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getUnprocessedExternalFunctions() {
+    llvm::DenseSet<llvm::Function*> externalFuncs;
     auto& functionMap = common.getFunctionMap();
 
     for (const auto& pair : functionMap) {
@@ -573,7 +577,7 @@ std::vector<llvm::Function*> BCModuleSplitter::getUnprocessedExternalFunctions()
 
         // 检查条件：链接属性为 EXTERNAL_LINKAGE 且未被处理
         if (funcInfo.linkage == EXTERNAL_LINKAGE && !funcInfo.isProcessed) {
-            externalFuncs.push_back(pair.first);
+            externalFuncs.insert(pair.first);
         }
     }
 
@@ -582,13 +586,13 @@ std::vector<llvm::Function*> BCModuleSplitter::getUnprocessedExternalFunctions()
     return externalFuncs;
 }
 
-std::vector<llvm::Function*> BCModuleSplitter::getHighInDegreeFunctions(int threshold) {
-    std::vector<llvm::Function*> highInDegreeFuncs;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getHighInDegreeFunctions(int threshold) {
+    llvm::DenseSet<llvm::Function*> highInDegreeFuncs;
     auto& functionMap = common.getFunctionMap();
 
     for (const auto& pair : functionMap) {
         if (pair.second.inDegree > threshold && !pair.second.isProcessed) {
-            highInDegreeFuncs.push_back(pair.first);
+            highInDegreeFuncs.insert(pair.first);
         }
     }
 
@@ -596,13 +600,13 @@ std::vector<llvm::Function*> BCModuleSplitter::getHighInDegreeFunctions(int thre
     return highInDegreeFuncs;
 }
 
-std::vector<llvm::Function*> BCModuleSplitter::getIsolatedFunctions() {
-    std::vector<llvm::Function*> isolatedFuncs;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getIsolatedFunctions() {
+    llvm::DenseSet<llvm::Function*> isolatedFuncs;
     auto& functionMap = common.getFunctionMap();
 
     for (const auto& pair : functionMap) {
         if (pair.second.outDegree == 0 && pair.second.inDegree == 0 && !pair.second.isProcessed) {
-            isolatedFuncs.push_back(pair.first);
+            isolatedFuncs.insert(pair.first);
         }
     }
 
@@ -610,8 +614,8 @@ std::vector<llvm::Function*> BCModuleSplitter::getIsolatedFunctions() {
     return isolatedFuncs;
 }
 
-std::unordered_set<llvm::GlobalVariable*> BCModuleSplitter::getGlobalVariables() {
-    std::unordered_set<llvm::GlobalVariable*> globals;
+llvm::DenseSet<llvm::GlobalVariable*> BCModuleSplitter::getGlobalVariables() {
+    llvm::DenseSet<llvm::GlobalVariable*> globals;
     llvm::Module* M = common.getModule();
 
     for (llvm::GlobalVariable& global : M->globals()) {
@@ -622,15 +626,15 @@ std::unordered_set<llvm::GlobalVariable*> BCModuleSplitter::getGlobalVariables()
     return globals;
 }
 
-std::vector<llvm::Function*> BCModuleSplitter::getTopFunctions(int topN) {
-    std::vector<std::pair<llvm::Function*, int>> scores;
+llvm::SmallVector<llvm::Function*> BCModuleSplitter::getTopFunctions(int topN) {
+    llvm::SmallVector<std::pair<llvm::Function*, int>> scores;
     auto& functionMap = common.getFunctionMap();
 
     for (const auto& pair : functionMap) {
         // 只考虑未处理的函数
         if (!pair.second.isProcessed) {
             int totalScore = pair.second.outDegree + pair.second.inDegree;
-            scores.emplace_back(pair.first, totalScore);
+            scores.push_back({pair.first, totalScore});
         }
     }
 
@@ -639,7 +643,7 @@ std::vector<llvm::Function*> BCModuleSplitter::getTopFunctions(int topN) {
              return a.second > b.second;
          });
 
-    std::vector<llvm::Function*> result;
+    llvm::SmallVector<llvm::Function*> result;
     logger.logToFile("\n=== 函数排名前" + std::to_string(topN) + " ===");
     for (int i = 0; i < std::min(topN, (int)scores.size()); i++) {
         result.push_back(scores[i].first);
@@ -651,8 +655,8 @@ std::vector<llvm::Function*> BCModuleSplitter::getTopFunctions(int topN) {
     return result;
 }
 
-std::unordered_set<llvm::Function*> BCModuleSplitter::getFunctionGroup(llvm::Function* F) {
-    std::unordered_set<llvm::Function*> group;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getFunctionGroup(llvm::Function* F) {
+    llvm::DenseSet<llvm::Function*> group;
     auto& functionMap = common.getFunctionMap();
 
     if (!F || functionMap.find(F) == functionMap.end()) {
@@ -684,27 +688,29 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getFunctionGroup(llvm::Fun
     return group;
 }
 
-std::unordered_set<llvm::Function*> BCModuleSplitter::getOriginWithOutDegreeFunctions(const std::unordered_set<llvm::Function*>& originFuncs) {
-    std::unordered_set<llvm::Function*> completeSet;
-    std::queue<llvm::Function*> toProcess;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getOriginWithOutDegreeFunctions(
+        const llvm::DenseSet<llvm::Function*>& originFuncs) {
+    llvm::DenseSet<llvm::Function*> completeSet;
+    llvm::SmallVector<llvm::Function*, 32> toProcess;
     auto& functionMap = common.getFunctionMap();
 
     // 初始添加所有高入度函数
     for (llvm::Function* F : originFuncs) {
         if (!F || functionMap[F].isProcessed) continue;
         completeSet.insert(F);
-        toProcess.push(F);
+        toProcess.push_back(F);
     }
 
     if (toProcess.empty()) {
-        //logger.logToFile("已无需进行扩展，均已记录，总数为: " + std::to_string(originFuncs.size()));
+        // logger.logToFile("已无需进行扩展，均已记录，总数为: " + std::to_string(originFuncs.size()));
         return originFuncs;
     }
 
     // 广度优先遍历所有出度函数
-    while (!toProcess.empty()) {
-        llvm::Function* currentF = toProcess.front();
-        toProcess.pop();
+    size_t frontIndex = 0;
+    while (frontIndex < toProcess.size()) {
+        llvm::Function* currentF = toProcess[frontIndex];
+        frontIndex++;
 
         // 获取当前函数的所有出度函数
         const FunctionInfo& info = functionMap[currentF];
@@ -712,11 +718,11 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getOriginWithOutDegreeFunc
             if (!calledF || functionMap[calledF].isProcessed) continue;
 
             // 如果函数不在集合中，添加到集合和队列
-            if (completeSet.find(calledF) == completeSet.end()) {
+            if (!completeSet.contains(calledF)) {
                 completeSet.insert(calledF);
-                toProcess.push(calledF);
-                //logger.logToFile("  添加出度函数: " + functionMap[called].displayName +
-                //             " [被 " + functionMap[current].displayName + " 调用]");
+                toProcess.push_back(calledF);
+                // logger.logToFile("  添加出度函数: " + functionMap[called].displayName +
+                //              " [被 " + functionMap[current].displayName + " 调用]");
             }
         }
     }
@@ -724,16 +730,20 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getOriginWithOutDegreeFunc
     return completeSet;
 }
 
-std::unordered_set<llvm::Function*> BCModuleSplitter::getStronglyConnectedComponent(
-        const std::unordered_set<llvm::Function*>& originFuncs) {
-    std::unordered_set<llvm::Function*> completeSet;
-    std::queue<llvm::Function*> toProcess;
+llvm::DenseSet<llvm::Function*> BCModuleSplitter::getStronglyConnectedComponent(
+        const llvm::DenseSet<llvm::Function*>& originFuncs) {
+    llvm::DenseSet<llvm::Function*> completeSet;
+
+    // 使用 SmallVector 模拟队列
+    llvm::SmallVector<llvm::Function*, 32> toProcess;
+
     auto& functionMap = common.getFunctionMap();
+
     // 初始添加函数
     for (llvm::Function* F : originFuncs) {
         if (!F || functionMap[F].isProcessed) continue;
         completeSet.insert(F);
-        toProcess.push(F);
+        toProcess.push_back(F);
     }
 
     if (toProcess.empty()) {
@@ -741,18 +751,22 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getStronglyConnectedCompon
     }
 
     // 广度优先遍历所有依赖循环
-    while (!toProcess.empty()) {
-        llvm::Function* currentF = toProcess.front();
-        toProcess.pop();
+    size_t frontIndex = 0;  // 模拟队列的队首索引
+    while (frontIndex < toProcess.size()) {
+        llvm::Function* currentF = toProcess[frontIndex];
+        frontIndex++;
 
         // 获取当前函数的所有循环依赖组
-        for (llvm::Function* cycF : common.getCyclicGroupsContainingFunction(currentF)) {
+        llvm::DenseSet<llvm::Function*> cyclicFuncs =
+            common.getCyclicGroupsContainingFunction(currentF);
+
+        for (llvm::Function* cycF : cyclicFuncs) {
             if (!cycF || functionMap[cycF].isProcessed) continue;
 
             // 如果函数不在集合中，添加到集合和队列
-            if (completeSet.find(cycF) == completeSet.end()) {
+            if (!completeSet.contains(cycF)) {
                 completeSet.insert(cycF);
-                toProcess.push(cycF);
+                toProcess.push_back(cycF);
             }
         }
     }
@@ -761,8 +775,8 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getStronglyConnectedCompon
 }
 
 // 创建全局变量组BC文件
-bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm::GlobalVariable*>& globals, const std::string& filename) {
-    logger.logToFile("创建全局变量BC文件: " + filename);
+bool BCModuleSplitter::createGlobalVariablesBCFile(const llvm::DenseSet<llvm::GlobalVariable*>& globals, llvm::StringRef filename) {
+    logger.logToFile("创建全局变量BC文件: " + filename.str());
 
     llvm::Module* origM = common.getModule();
     const auto& globalVariableMap = common.getGlobalVariableMap();
@@ -772,7 +786,7 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     std::unique_ptr<llvm::Module> newM = CloneModule(*origM, VMap);
 
     // 2. 构建新模块中需要保留的全局变量集合
-    std::unordered_set<llvm::GlobalVariable*> clonedGlobalsToKeep;
+    llvm::DenseSet<llvm::GlobalVariable*> clonedGlobalsToKeep;
     for (llvm::GlobalVariable* origGV : globals) {
         if (!origGV) continue;
 
@@ -787,9 +801,9 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     }
 
     // 3. 清理新模块：删除不需要保留的全局变量
-    std::vector<llvm::GlobalVariable*> globalsToProcess;
+    llvm::DenseSet<llvm::GlobalVariable*> globalsToProcess;
     for (llvm::GlobalVariable& GV : newM->globals()) {
-        globalsToProcess.push_back(&GV);
+        globalsToProcess.insert(&GV);
     }
 
     for (llvm::GlobalVariable* GV : globalsToProcess) {
@@ -822,9 +836,9 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
     }
 
     // 4. 清理函数（全部删除或转为声明）
-    std::vector<llvm::Function*> functionsToProcess;
+    llvm::DenseSet<llvm::Function*> functionsToProcess;
     for (llvm::Function& F : *newM) {
-        functionsToProcess.push_back(&F);
+        functionsToProcess.insert(&F);
     }
 
     for (llvm::Function* F : functionsToProcess) {
@@ -841,18 +855,18 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
 
     // 5. 清理其他可能的内容（别名、IFunc等）
     // 删除全局别名（GlobalAlias）
-    std::vector<llvm::GlobalAlias*> aliasesToRemove;
+    llvm::DenseSet<llvm::GlobalAlias*> aliasesToRemove;
     for (llvm::GlobalAlias& GA : newM->aliases()) {
-        aliasesToRemove.push_back(&GA);
+        aliasesToRemove.insert(&GA);
     }
     for (llvm::GlobalAlias* GA : aliasesToRemove) {
         GA->eraseFromParent();
     }
 
     // 删除IFunc（间接函数）
-    std::vector<llvm::GlobalIFunc*> ifuncsToRemove;
+    llvm::DenseSet<llvm::GlobalIFunc*> ifuncsToRemove;
     for (llvm::GlobalIFunc& GIF : newM->ifuncs()) {
-        ifuncsToRemove.push_back(&GIF);
+        ifuncsToRemove.insert(&GIF);
     }
     for (llvm::GlobalIFunc* GIF : ifuncsToRemove) {
         GIF->eraseFromParent();
@@ -871,8 +885,8 @@ bool BCModuleSplitter::createGlobalVariablesBCFile(const std::unordered_set<llvm
 }
 
 // 新增：统一的BC文件创建入口，支持两种模式
-bool BCModuleSplitter::createBCFile(const std::unordered_set<llvm::Function*>& group,
-                    const std::string& filename,
+bool BCModuleSplitter::createBCFile(const llvm::DenseSet<llvm::Function*>& group,
+                    llvm::StringRef filename,
                     int groupIndex) {
     if (BCModuleSplitter::currentMode == CLONE_MODE) {
         return createBCFileWithClone(group, filename, groupIndex);
@@ -882,7 +896,7 @@ bool BCModuleSplitter::createBCFile(const std::unordered_set<llvm::Function*>& g
 }
 
 // 修改后的拆分方法 - 按照指定数量范围分组
-void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
+void BCModuleSplitter::splitBCFiles(llvm::StringRef outputPrefix) {
     logger.log("\n开始拆分BC文件...");
     logger.log("当前模式: " + std::string(BCModuleSplitter::currentMode == CLONE_MODE ? "CLONE_MODE" : "MANUAL_MODE"));
 
@@ -890,10 +904,10 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     auto& functionMap = common.getFunctionMap();
 
     // 步骤1: 首先处理全局变量组
-    std::unordered_set<llvm::GlobalVariable*> globals = getGlobalVariables();
+    llvm::DenseSet<llvm::GlobalVariable*> globals = getGlobalVariables();
 
     if (!globals.empty()) {
-        std::string filename = outputPrefix + "_group_globals.bc";
+        std::string filename = outputPrefix.str() + "_group_globals.bc";
 
         if (createGlobalVariablesBCFile(globals, filename)) {
             logger.log("✓ 全局变量BC文件创建成功: " + filename);
@@ -902,12 +916,11 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     }
 
     // 步骤2: 处理外部链接函数组
-     std::vector<llvm::Function*> externalFuncs = getUnprocessedExternalFunctions();
+    llvm::DenseSet<llvm::Function*> externalSet = getUnprocessedExternalFunctions();
 
-    if (!externalFuncs.empty()) {
-        std::unordered_set<llvm::Function*> externalSet(externalFuncs.begin(), externalFuncs.end());
-        std::unordered_set<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(externalSet);
-        std::string filename = outputPrefix + "_group_external.bc";
+    if (!externalSet.empty()) {
+        llvm::DenseSet<llvm::Function*> completeExternalSet = getStronglyConnectedComponent(externalSet);
+        std::string filename = outputPrefix.str() + "_group_external.bc";
 
         if (createBCFile(completeExternalSet, filename, 1)) {
             bool verified = false;
@@ -930,12 +943,11 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     }
 
     // 步骤3: 处理高入度函数组（包含完整的出度链）
-     std::vector<llvm::Function*> highInDegreeFuncs = getHighInDegreeFunctions(150);
+     llvm::DenseSet<llvm::Function*> highInDegreeSet = getHighInDegreeFunctions(150);
 
-    if (!highInDegreeFuncs.empty()) {
-        std::unordered_set<llvm::Function*> highInDegreeSet(highInDegreeFuncs.begin(), highInDegreeFuncs.end());
-        std::string filename = outputPrefix + "_group_high_in_degree.bc";
-        std::unordered_set<llvm::Function*> completeHighInDegreeSet = getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(highInDegreeSet));
+    if (!highInDegreeSet.empty()) {
+        std::string filename = outputPrefix.str() + "_group_high_in_degree.bc";
+        llvm::DenseSet<llvm::Function*> completeHighInDegreeSet = getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(highInDegreeSet));
         if (createBCFile(completeHighInDegreeSet, filename, 2)) {
             bool verified = false;
             if (BCModuleSplitter::currentMode == CLONE_MODE) {
@@ -958,11 +970,11 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     }
 
     // 步骤4: 处理孤立函数组（出度=0且入度=0）
-     std::vector<llvm::Function*> isolatedFuncs = getIsolatedFunctions();
+     llvm::DenseSet<llvm::Function*> isolatedSet = getIsolatedFunctions();
 
-    if (!isolatedFuncs.empty()) {
-        std::unordered_set<llvm::Function*> isolatedSet(isolatedFuncs.begin(), isolatedFuncs.end());
-        std::string filename = outputPrefix + "_group_isolated.bc";
+    if (!isolatedSet.empty()) {
+
+        std::string filename = outputPrefix.str() + "_group_isolated.bc";
 
         if (createBCFile(isolatedSet, filename, 3)) {
             bool verified = false;
@@ -989,7 +1001,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
     logger.log("开始按照指定数量范围分组...");
 
     // 获取所有未处理的函数并按总分排序
-     std::vector<std::pair<llvm::Function*, int>> remainingFunctions = getRemainingFunctions();
+    llvm::SmallVector<std::pair<llvm::Function*, int>> remainingFunctions = getRemainingFunctions();
 
     logger.log("剩余未处理函数数量: " + std::to_string(remainingFunctions.size()));
 
@@ -998,7 +1010,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 
     // 持续分组直到所有函数都处理完
     while (coutRemainingGroup < remainingFunctions.size()) {
-        std::unordered_set<llvm::Function*> group;
+        llvm::DenseSet<llvm::Function*> group;
 
         // 按排名逐个加入函数，直到第一次超过2000个函数
         for (int i = coutRemainingGroup; i < remainingFunctions.size(); i++) {
@@ -1015,7 +1027,7 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
             group.insert(F);
 
             // 计算当前组的强连通分量
-            std::unordered_set<llvm::Function*> tempGroup =
+            llvm::DenseSet<llvm::Function*> tempGroup =
                 getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(group));
 
             // 如果强连通分量大小超过2000停止
@@ -1038,14 +1050,14 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
         }
 
         // 获取最终的分组（强连通分量）
-        std::unordered_set<llvm::Function*> completeGroup =
+        llvm::DenseSet<llvm::Function*> completeGroup =
             getStronglyConnectedComponent(getOriginWithOutDegreeFunctions(group));
 
         logger.log("处理组 {" + std::to_string(groupIndex) +
                    "} 包含 " + std::to_string(completeGroup.size()) + " 个函数");
 
         // 创建BC文件
-        std::string filename = outputPrefix + "_group_" + std::to_string(groupIndex) + ".bc";
+        std::string filename = outputPrefix.str() + "_group_" + std::to_string(groupIndex) + ".bc";
         if (createBCFile(completeGroup, filename, groupIndex)) {
             // 验证并修复生成的BC文件
             bool verified = false;
@@ -1105,8 +1117,8 @@ void BCModuleSplitter::splitBCFiles(const std::string& outputPrefix) {
 }
 
 // 优化的BC文件创建方法，正确处理链接属性
-bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm::Function*>& group, const std::string& filename, int groupIndex) {
-    logger.logToFile("创建BC文件: " + filename + " (组 " + std::to_string(groupIndex) + ")");
+bool BCModuleSplitter::createBCFileWithSignatures(const llvm::DenseSet<llvm::Function*>& group, llvm::StringRef filename, int groupIndex) {
+    logger.logToFile("创建BC文件: " + filename.str() + " (组 " + std::to_string(groupIndex) + ")");
 
     // 使用全新的上下文
     llvm::LLVMContext newContext;
@@ -1123,7 +1135,7 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
         if (!origF) continue;
 
         // 在新建上下文中重新创建函数类型
-         std::vector<llvm::Type*> paramTypes;
+        llvm::SmallVector<llvm::Type*> paramTypes;
         for (const auto& arg : origF->args()) {
             llvm::Type* argType = arg.getType();
 
@@ -1195,21 +1207,21 @@ bool BCModuleSplitter::createBCFileWithSignatures(const std::unordered_set<llvm:
 }
 
 // 新增：使用LLVM CloneModule创建BC文件
-bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Function*>& group,
-                            const std::string& filename,
+bool BCModuleSplitter::createBCFileWithClone(const llvm::DenseSet<llvm::Function*>& group,
+                            llvm::StringRef filename,
                             int groupIndex) {
-    logger.logToFile("使用Clone模式创建BC文件: " + filename + " (组 " + std::to_string(groupIndex) + ")");
+    logger.logToFile("使用Clone模式创建BC文件: " + filename.str() + " (组 " + std::to_string(groupIndex) + ")");
 
     // 使用ValueToValueMapTy进行克隆
     llvm::ValueToValueMapTy vmap;
-    std::unordered_set<llvm::Function*> newExternalGroup;
-    std::unordered_set<llvm::Function*> newGroup;
+    llvm::DenseSet<llvm::Function*> newExternalGroup;
+    llvm::DenseSet<llvm::Function*> newGroup;
     llvm::Module* M = common.getModule();
     auto& functionMap = common.getFunctionMap();
     auto newM = CloneModule(*M, vmap);
 
     if (!newM) {
-        logger.logError("CloneModule失败: " + filename);
+        logger.logError("CloneModule失败: " + filename.str());
         return false;
     }
 
@@ -1255,18 +1267,18 @@ bool BCModuleSplitter::createBCFileWithClone(const std::unordered_set<llvm::Func
         }
     }
 
-    logger.logToFile("Clone模式完成: " + filename + " (包含 " + std::to_string(group.size()) + " 个函数)");
+    logger.logToFile("Clone模式完成: " + filename.str() + " (包含 " + std::to_string(group.size()) + " 个函数)");
     return common.writeBitcodeSafely(*newM, filename);
 }
 
 // 新增：处理克隆模块中的函数
 void BCModuleSplitter::processClonedModuleFunctions(llvm::Module& M,
-    const std::unordered_set<llvm::Function*>& targetGroup,
-    const std::unordered_set<llvm::Function*>& externalGroup) {
+    const llvm::DenseSet<llvm::Function*>& targetGroup,
+    const llvm::DenseSet<llvm::Function*>& externalGroup) {
     // 处理所有函数
-    std::vector<llvm::Function*> functionsToProcess;
+    llvm::DenseSet<llvm::Function*> functionsToProcess;
     for (llvm::Function& F : M) {
-        functionsToProcess.push_back(&F);
+        functionsToProcess.insert(&F);
     }
 
     for (llvm::Function* F : functionsToProcess) {
@@ -1313,14 +1325,14 @@ void BCModuleSplitter::processClonedModuleGlobals(llvm::Module& M) {
 }
 
 // 新增：获取剩余函数列表
- std::vector<std::pair<llvm::Function*, int>> BCModuleSplitter::getRemainingFunctions() {
-     std::vector<std::pair<llvm::Function*, int>> remainingFunctions;
+llvm::SmallVector<std::pair<llvm::Function*, int>> BCModuleSplitter::getRemainingFunctions() {
+    llvm::SmallVector<std::pair<llvm::Function*, int>> remainingFunctions;
     auto& functionMap = common.getFunctionMap();
 
     for (const auto& pair : functionMap) {
         if (!pair.second.isProcessed) {
             int totalScore = pair.second.outDegree + pair.second.inDegree;
-            remainingFunctions.emplace_back(pair.first, totalScore);
+            remainingFunctions.push_back({pair.first, totalScore});
         }
     }
 
@@ -1334,9 +1346,9 @@ void BCModuleSplitter::processClonedModuleGlobals(llvm::Module& M) {
 }
 
 // 新增：按范围获取函数组
-std::unordered_set<llvm::Function*> BCModuleSplitter::getFunctionGroupByRange(const  std::vector<std::pair<llvm::Function*, int>>& functions,
+llvm::SmallVector<llvm::Function*> BCModuleSplitter::getFunctionGroupByRange(const  llvm::SmallVector<std::pair<llvm::Function*, int>>& functions,
                                                 int start, int end) {
-    std::unordered_set<llvm::Function*> group;
+    llvm::SmallVector<llvm::Function*> group;
     auto& functionMap = common.getFunctionMap();
 
     for (int i = start; i < functions.size(); i++) {
@@ -1345,7 +1357,7 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getFunctionGroupByRange(co
         llvm::Function* F = functions[i].first;
         if (!F || functionMap[F].isProcessed) continue;
 
-        group.insert(F);
+        group.push_back(F);
     }
     return group;
 }
@@ -1353,23 +1365,23 @@ std::unordered_set<llvm::Function*> BCModuleSplitter::getFunctionGroupByRange(co
 // 在 splitter.cpp 中添加这些方法的实现
 
 // 验证所有BC文件
-void BCModuleSplitter::validateAllBCFiles(const std::string& outputPrefix) {
+void BCModuleSplitter::validateAllBCFiles(llvm::StringRef outputPrefix) {
     logger.log("\n=== 通过 BCModuleSplitter 验证所有BC文件 ===");
     verifier.validateAllBCFiles(outputPrefix, currentMode == CLONE_MODE);
 }
 
 // 验证并修复单个BC文件
-bool BCModuleSplitter::verifyAndFixBCFile(const std::string& filename,
-                                        const std::unordered_set<llvm::Function*>& expectedGroup) {
+bool BCModuleSplitter::verifyAndFixBCFile(llvm::StringRef filename,
+                                        const llvm::DenseSet<llvm::Function*>& expectedGroup) {
     return verifier.verifyAndFixBCFile(filename, expectedGroup);
 }
 
 // 快速验证BC文件
-bool BCModuleSplitter::quickValidateBCFile(const std::string& filename) {
+bool BCModuleSplitter::quickValidateBCFile(llvm::StringRef filename) {
     return verifier.quickValidateBCFile(filename);
 }
 
 // 分析BC文件内容
-void BCModuleSplitter::analyzeBCFileContent(const std::string& filename) {
+void BCModuleSplitter::analyzeBCFileContent(llvm::StringRef filename) {
     verifier.analyzeBCFileContent(filename);
 }

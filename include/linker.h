@@ -34,8 +34,8 @@ private:
     std::mutex logMutex;  // 用于保护logger的并发访问
 
     // 用于跟踪阶段完成状态 - 使用智能指针避免悬空引用
-    std::unordered_map<int, std::shared_ptr<std::promise<void>>> phase1Promises;
-    std::unordered_map<int, std::shared_future<void>> phase1Futures;
+    llvm::DenseMap<int, std::shared_ptr<std::promise<void>>> phase1Promises;
+    llvm::DenseMap<int, std::shared_future<void>> phase1Futures;
     std::mutex phaseMutex;
 
 public:
@@ -44,9 +44,9 @@ public:
     // 核心功能
     void initphase1();
     void printFileMapDetails();
-    std::vector<std::string> readResponseFile();
-    void generateInputFiles(const std::string& outputPrefix);
-    static bool executeLdLld(const std::string& responseFilePath, const std::string& extralCommand);
+    llvm::SmallVector<llvm::StringRef, 200> readResponseFile();
+    void generateInputFiles(llvm::StringRef outputPrefix);
+    static bool executeLdLld(llvm::StringRef responseFilePath, llvm::StringRef extralCommand);
     void processGroupTask(int groupId, std::promise<bool>& promise);
     bool executeAllGroups();
     bool enterInWorkDir();

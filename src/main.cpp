@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (inputFile.find("/") != std::string::npos) {
+    if (inputFile.find("/") != llvm::StringRef::npos) {
         std::cerr << "输入文件需要和二进制相同目录,且不带路径形式" << std::endl;
         return 1;
     }
@@ -77,8 +77,7 @@ int main(int argc, char* argv[]) {
         splitter.generateGroupReport(outputPrefix);
 
         //linker.printFileMapDetails();
-
-        linker.readResponseFile();
+        //linker.readResponseFile();
         linker.generateInputFiles(outputPrefix);
         linker.enterInWorkDir();
         linker.initphase1();

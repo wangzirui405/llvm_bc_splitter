@@ -3,9 +3,6 @@
 #define BC_SPLITTER_VERIFIER_H
 
 #include <string>
-#include <unordered_set>
-#include <unordered_map>
-#include <vector>
 #include <fstream>
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -30,14 +27,14 @@ private:
     Config config;
 
     // 辅助函数
-    std::string decodeEscapeSequences(const std::string& escapedStr);
+    std::string decodeEscapeSequences(llvm::StringRef escapedStr);
     std::string getLinkageString(llvm::GlobalValue::LinkageTypes linkage);
     std::string getVisibilityString(llvm::GlobalValue::VisibilityTypes visibility);
 
     // 函数名映射构建
-    void buildFunctionNameMapsWithLog(const std::unordered_set<llvm::Function*>& group,
-                                    std::unordered_map<std::string, llvm::Function*>& nameToFunc,
-                                    std::unordered_map<std::string, std::string>& escapedToOriginal,
+    void buildFunctionNameMapsWithLog(const llvm::DenseSet<llvm::Function*>& group,
+                                    llvm::StringMap<llvm::Function*>& nameToFunc,
+                                    llvm::StringMap<std::string>& escapedToOriginal,
                                     std::ofstream& individualLog);
 
 public:
@@ -45,31 +42,31 @@ public:
 
     // 核心验证方法
     bool verifyFunctionSignature(llvm::Function* F);
-    bool quickValidateBCFile(const std::string& filename);
-    bool quickValidateBCFileWithLog(const std::string& filename, std::ofstream& individualLog);
+    bool quickValidateBCFile(llvm::StringRef filename);
+    bool quickValidateBCFileWithLog(llvm::StringRef filename, std::ofstream& individualLog);
 
     // 错误分析和修复
-    std::unordered_set<std::string> analyzeVerifierErrorsWithLog(
-        const std::string& verifyOutput,
-        const std::unordered_set<llvm::Function*>& group,
+    llvm::StringSet<> analyzeVerifierErrorsWithLog(
+        llvm::StringRef verifyOutput,
+        const llvm::DenseSet<llvm::Function*>& group,
         std::ofstream& individualLog);
 
-    bool verifyAndFixBCFile(const std::string& filename,
-                          const std::unordered_set<llvm::Function*>& expectedGroup);
+    bool verifyAndFixBCFile(llvm::StringRef filename,
+                          const llvm::DenseSet<llvm::Function*>& expectedGroup);
 
     // 批量验证
-    void validateAllBCFiles(const std::string& outputPrefix, bool isCloneMode);
+    void validateAllBCFiles(llvm::StringRef outputPrefix, bool isCloneMode);
 
     // 内容分析
-    void analyzeBCFileContent(const std::string& filename);
+    void analyzeBCFileContent(llvm::StringRef filename);
 
     // 重命名和修复
-    bool recreateBCFileWithExternalLinkage(const std::unordered_set<llvm::Function*>& group,
-                                         const std::unordered_set<std::string>& externalFuncNames,
-                                         const std::string& filename,
+    bool recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::Function*>& group,
+                                         const llvm::StringSet<>& externalFuncNames,
+                                         llvm::StringRef filename,
                                          int groupIndex);
     void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& M,
-                                                 const std::unordered_set<std::string>& externalFuncNames);
+                                                 const llvm::StringSet<>& externalFuncNames);
 
 };
 

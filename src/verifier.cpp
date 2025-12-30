@@ -15,15 +15,19 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SetVector.h"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
 
 BCVerifier::BCVerifier(BCCommon& commonRef) : common(commonRef) {}
 
-std::string BCVerifier::decodeEscapeSequences(const std::string& escapedStr) {
+std::string BCVerifier::decodeEscapeSequences(llvm::StringRef escapedStr) {
     std::string result;
-    for (size_t i = 0; i < escapedStr.length(); ) {
+    for (size_t i = 0; i < escapedStr.size(); ) {
         // 处理转义序列的逻辑...
         // 保留原始逻辑
         result += escapedStr[i++];
@@ -56,9 +60,9 @@ std::string BCVerifier::getVisibilityString(llvm::GlobalValue::VisibilityTypes v
 }
 
 // 新增：带独立日志的构建函数名映射方法
-void BCVerifier::buildFunctionNameMapsWithLog(const std::unordered_set<llvm::Function*>& group,
-                                std::unordered_map<std::string, llvm::Function*>& nameToFunc,
-                                std::unordered_map<std::string, std::string>& escapedToOriginal,
+void BCVerifier::buildFunctionNameMapsWithLog(const llvm::DenseSet<llvm::Function*>& group,
+                                llvm::StringMap<llvm::Function*>& nameToFunc,
+                                llvm::StringMap<std::string>& escapedToOriginal,
                                 std::ofstream& individualLog) {
 
     for (llvm::Function* F : group) {
@@ -72,10 +76,10 @@ void BCVerifier::buildFunctionNameMapsWithLog(const std::unordered_set<llvm::Fun
                         ", 可见性: " + getVisibilityString(F->getVisibility()) + "]");
 
         // 转义序列处理逻辑...
-        if (originalName.find("§") != std::string::npos) {
+        if (originalName.find("§") != llvm::StringRef::npos) {
             std::string escapedName = originalName;
             size_t pos = 0;
-            while ((pos = escapedName.find("§", pos)) != std::string::npos) {
+            while ((pos = escapedName.find("§", pos)) != llvm::StringRef::npos) {
                 escapedName.replace(pos, 2, "\\C2\\A7");
                 pos += 6;
             }
@@ -103,13 +107,13 @@ bool BCVerifier::verifyFunctionSignature(llvm::Function* F) {
 }
 
 // 新增：简化验证方法
-bool BCVerifier::quickValidateBCFile(const std::string& filename) {
+bool BCVerifier::quickValidateBCFile(llvm::StringRef filename) {
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename.str(), err, tempContext);
 
     if (!testModule) {
-        logger.logError("快速验证失败 - 无法加载: " + filename);
+        logger.logError("快速验证失败 - 无法加载: " + filename.str());
         return false;
     }
 
@@ -118,9 +122,9 @@ bool BCVerifier::quickValidateBCFile(const std::string& filename) {
     bool moduleValid = !verifyModule(*testModule, &rso);
 
     if (moduleValid) {
-        logger.log("✓ 快速验证通过: " + filename);
+        logger.log("✓ 快速验证通过: " + filename.str());
     } else {
-        logger.logError("快速验证失败: " + filename);
+        logger.logError("快速验证失败: " + filename.str());
         logger.logError("错误详情: " + rso.str());
     }
 
@@ -128,12 +132,12 @@ bool BCVerifier::quickValidateBCFile(const std::string& filename) {
 }
 
 // 新增：带独立日志的快速验证方法
-bool BCVerifier::quickValidateBCFileWithLog(const std::string& filename, std::ofstream& individualLog) {
-    logger.logToIndividualLog(individualLog, "快速验证BC文件: " + filename);
+bool BCVerifier::quickValidateBCFileWithLog(llvm::StringRef filename, std::ofstream& individualLog) {
+    logger.logToIndividualLog(individualLog, "快速验证BC文件: " + filename.str());
 
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename.str(), err, tempContext);
 
     if (!testModule) {
         logger.logToIndividualLog(individualLog, "错误: 无法加载BC文件进行快速验证");
@@ -156,19 +160,19 @@ bool BCVerifier::quickValidateBCFileWithLog(const std::string& filename, std::of
 
 // 完整的带独立日志的分析验证错误方法
 // 修改 analyzeVerifierErrorsWithLog 函数中的映射构建部分
-std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const std::string& verifyOutput,
-                                                const std::unordered_set<llvm::Function*>& group,
+llvm::StringSet<> BCVerifier::analyzeVerifierErrorsWithLog(llvm::StringRef verifyOutput,
+                                                const llvm::DenseSet<llvm::Function*>& group,
                                                 std::ofstream& individualLog) {
-    std::unordered_set<std::string> functionsNeedExternal;
+    llvm::StringSet<> functionsNeedExternal;
 
     logger.logToIndividualLog(individualLog, "分析verifier错误输出...");
-    logger.logToIndividualLog(individualLog, "Verifier输出长度: " + std::to_string(verifyOutput.length()));
+    logger.logToIndividualLog(individualLog, "Verifier输出长度: " + std::to_string(verifyOutput.size()));
 
     // 构建函数名映射和序号映射（只包含无名函数）
-    std::unordered_map<std::string, llvm::Function*> nameToFunc;
-    std::unordered_map<int, llvm::Function*> sequenceToFunc;  // 只包含无名函数的序号映射
-    std::unordered_map<std::string, std::string> escapedToOriginal;
-    std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
+    llvm::StringMap<llvm::Function*> nameToFunc;
+    llvm::DenseMap<int, llvm::Function*> sequenceToFunc;  // 只包含无名函数的序号映射
+    llvm::StringMap<std::string> escapedToOriginal;
+    llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
 
     // 新增：记录所有无名函数的原始名称和序号
     std::vector<std::pair<int, std::string>> unnamedFunctions;
@@ -201,10 +205,10 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
                         ", 可见性: " + functionMap[F].getVisibilityString() + "]");
 
         // 转义序列处理
-        if (originalName.find("§") != std::string::npos) {
+        if (originalName.find("§") != llvm::StringRef::npos) {
             std::string escapedName = originalName;
             size_t pos = 0;
-            while ((pos = escapedName.find("§", pos)) != std::string::npos) {
+            while ((pos = escapedName.find("§", pos)) != llvm::StringRef::npos) {
                 escapedName.replace(pos, 2, "\\C2\\A7");
                 pos += 6;
             }
@@ -228,29 +232,29 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
     int errorCount = 0;
     int unnamedMatchCount = 0;  // 新增：统计通过序号匹配的无名函数数量
 
-    while ((searchPos = verifyOutput.find(searchPattern, searchPos)) != std::string::npos) {
+    while ((searchPos = verifyOutput.find(searchPattern, searchPos)) != llvm::StringRef::npos) {
         errorCount++;
 
         // 找到错误描述后的函数指针信息
         size_t ptrPos = verifyOutput.find("ptr @", searchPos + patternLength);
-        if (ptrPos != std::string::npos) {
+        if (ptrPos != llvm::StringRef::npos) {
             size_t nameStart = ptrPos + 5; // "ptr @" 的长度
 
             // 检查函数名是否带引号
-            bool isQuoted = (nameStart < verifyOutput.length() && verifyOutput[nameStart] == '"');
+            bool isQuoted = (nameStart < verifyOutput.size() && verifyOutput[nameStart] == '"');
             std::string extractedName;
 
             if (isQuoted) {
                 // 处理带引号的函数名
                 size_t quoteEnd = verifyOutput.find('"', nameStart + 1);
-                if (quoteEnd != std::string::npos) {
+                if (quoteEnd != llvm::StringRef::npos) {
                     extractedName = verifyOutput.substr(nameStart + 1, quoteEnd - nameStart - 1);
                     logger.logToIndividualLog(individualLog, "发现带引号的函数名: \"" + extractedName + "\"");
                 }
             } else {
                 // 处理不带引号的函数名
                 size_t nameEnd = verifyOutput.find_first_of(" \n\r\t,;", nameStart);
-                if (nameEnd == std::string::npos) nameEnd = verifyOutput.length();
+                if (nameEnd == llvm::StringRef::npos) nameEnd = verifyOutput.size();
 
                 extractedName = verifyOutput.substr(nameStart, nameEnd - nameStart);
                 logger.logToIndividualLog(individualLog, "发现不带引号的函数名: " + extractedName);
@@ -308,21 +312,21 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
 
                 // 尝试5: 部分匹配（处理可能的转义序列变体）
                 if (!foundMatch) {
-                    for (const auto& pair : nameToFunc) {
-                        const std::string& candidateName = pair.first;
+                    for (const auto& entry : nameToFunc) {
+                        llvm::StringRef candidateName = entry.getKey();
 
                         // 检查提取的名称是否是候选名称的转义版本
-                        std::string escapedCandidate = candidateName;
+                        std::string escapedCandidate = candidateName.str();
                         size_t pos = 0;
-                        while ((pos = escapedCandidate.find("§", pos)) != std::string::npos) {
+                        while ((pos = escapedCandidate.find("§", pos)) != llvm::StringRef::npos) {
                             escapedCandidate.replace(pos, 2, "\\C2\\A7");
                             pos += 6;
                         }
 
                         if (extractedName == escapedCandidate) {
-                            functionsNeedExternal.insert(candidateName);
+                            functionsNeedExternal.insert(candidateName.str());
                             logger.logToIndividualLog(individualLog, "通过转义转换匹配到函数 [" + std::to_string(errorCount) + "]: " +
-                                            candidateName + " (转义: " + extractedName + ")");
+                                            candidateName.str() + " (转义: " + extractedName + ")");
                             foundMatch = true;
                             break;
                         }
@@ -334,8 +338,8 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
 
                     // 记录详细信息用于调试
                     size_t debugStart = (ptrPos > 50) ? ptrPos - 50 : 0;
-                    size_t debugLength = std::min(verifyOutput.length() - debugStart, size_t(150));
-                    logger.logToIndividualLog(individualLog, "  附近文本: " + verifyOutput.substr(debugStart, debugLength));
+                    size_t debugLength = std::min(verifyOutput.size() - debugStart, size_t(150));
+                    logger.logToIndividualLog(individualLog, "  附近文本: " + verifyOutput.str().substr(debugStart, debugLength));
 
                     // 新增：如果是数字但未匹配，可能是无名函数序号超出范围
                     try {
@@ -353,7 +357,7 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
 
             // 移动到下一个可能的位置
             searchPos = ptrPos + 1;
-            if (searchPos >= verifyOutput.length()) break;
+            if (searchPos >= verifyOutput.size()) break;
         } else {
             // 没有找到ptr @，移动到下一个位置
             searchPos += patternLength;
@@ -370,13 +374,13 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
     // 如果仍然没有找到，但存在链接错误，标记所有组内函数
     if (functionsNeedExternal.empty() && errorCount > 0) {
         logger.logToIndividualLog(individualLog, "检测到 " + std::to_string(errorCount) + " 个链接错误但匹配失败，标记所有组内函数需要external");
-        for (const auto& pair : nameToFunc) {
-            functionsNeedExternal.insert(pair.first);
+        for (const auto& entry : nameToFunc) {
+            functionsNeedExternal.insert(entry);
         }
     }
 
     // 原有的其他错误模式检测（作为补充）
-    std::vector<std::string> supplementalPatterns = {
+    llvm::StringSet<> supplementalPatterns = {
         "has private linkage",
         "has internal linkage",
         "visibility not default",
@@ -385,16 +389,17 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
         "undefined reference"
     };
 
-    for (const std::string& pattern : supplementalPatterns) {
-        if (verifyOutput.find(pattern) != std::string::npos) {
-            logger.logToIndividualLog(individualLog, "发现补充错误模式: " + pattern);
+    for (const auto& entry : supplementalPatterns) {
+        llvm::StringRef pattern = entry.getKey();
+        if (verifyOutput.find(pattern) != llvm::StringRef::npos) {
+            logger.logToIndividualLog(individualLog, "发现补充错误模式: " + std::to_string(pattern.size()));
 
             // 尝试匹配组内函数
-            for (const auto& pair : nameToFunc) {
-                const std::string& funcName = pair.first;
-                if (verifyOutput.find(funcName) != std::string::npos) {
-                    functionsNeedExternal.insert(funcName);
-                    logger.logToIndividualLog(individualLog, "通过补充模式匹配到函数: " + funcName);
+            for (const auto& entry : nameToFunc) {
+                llvm::StringRef funcName = entry.getKey();
+                if (verifyOutput.find(funcName) != llvm::StringRef::npos) {
+                    functionsNeedExternal.insert(funcName.str());
+                    logger.logToIndividualLog(individualLog, "通过补充模式匹配到函数: " + funcName.str());
                 }
             }
         }
@@ -405,14 +410,15 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
     // 输出详细信息
     if (!functionsNeedExternal.empty()) {
         logger.logToIndividualLog(individualLog, "需要external的函数列表:");
-        std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
-        for (const std::string& funcName : functionsNeedExternal) {
-            llvm::Function* F = nameToFunc[funcName];
+        llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
+        for (const auto& entry : functionsNeedExternal) {
+            llvm::StringRef funcNameRef = entry.getKey();
+            llvm::Function* F = nameToFunc[funcNameRef.str()];
             if (F) {
                 std::string seqInfo = functionMap[F].isUnnamed() ?
                                 ", 序号: " + std::to_string(functionMap[F].sequenceNumber) :
                                 ", 有名函数";
-                logger.logToIndividualLog(individualLog, "  " + funcName +
+                logger.logToIndividualLog(individualLog, "  " + funcNameRef.str() +
                         " [当前链接: " + functionMap[F].getLinkageString() +
                         ", 可见性: " + functionMap[F].getVisibilityString() + seqInfo + "]");
             }
@@ -424,20 +430,20 @@ std::unordered_set<std::string> BCVerifier::analyzeVerifierErrorsWithLog(const s
 
 // 新增：验证并修复BC文件的方法
 // 添加独立日志支持
-bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unordered_set<llvm::Function*>& expectedGroup) {
+bool BCVerifier::verifyAndFixBCFile(llvm::StringRef filename, const llvm::DenseSet<llvm::Function*>& expectedGroup) {
     // 创建独立日志文件
     std::ofstream individualLog = logger.createIndividualLogFile(filename, "_verify");
 
-    logger.logToIndividualLog(individualLog, "开始验证并修复BC文件: " + filename, true);
+    logger.logToIndividualLog(individualLog, "开始验证并修复BC文件: " + filename.str(), true);
 
     llvm::LLVMContext verifyContext;
     llvm::SMDiagnostic err;
-    auto loadedModule = parseIRFile(config.workSpace + "output/" + filename, err, verifyContext);
-    std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
+    auto loadedModule = parseIRFile(config.workSpace + "output/" + filename.str(), err, verifyContext);
+    llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
 
 
     if (!loadedModule) {
-        logger.logToIndividualLog(individualLog, "错误: 无法加载验证的BC文件: " + filename, true);
+        logger.logToIndividualLog(individualLog, "错误: 无法加载验证的BC文件: " + filename.str(), true);
         err.print("BCVerifier", llvm::errs());
         individualLog.close();
         return false;
@@ -474,7 +480,7 @@ bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unor
 
         // 检查3: 验证函数签名完整性
         bool allSignaturesValid = true;
-        std::unordered_set<std::string> expectedNames;
+        llvm::StringSet<> expectedNames;
 
         for (llvm::Function* expectedF : expectedGroup) {
             if (expectedF) {
@@ -525,13 +531,13 @@ bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unor
         }
 
         // 分析错误信息，识别需要external链接的函数
-        std::unordered_set<std::string> externalFuncNames = analyzeVerifierErrorsWithLog(rso.str(), expectedGroup, individualLog);
+        llvm::StringSet<> externalFuncNames = analyzeVerifierErrorsWithLog(rso.str(), expectedGroup, individualLog);
 
         if (!externalFuncNames.empty()) {
             logger.logToIndividualLog(individualLog, "发现需要修复的函数数量: " + std::to_string(externalFuncNames.size()), true);
 
             // 重新生成BC文件，将需要external的函数设置为external链接
-            std::string fixedFilename = filename + ".fixed.bc";
+            std::string fixedFilename = filename.str() + ".fixed.bc";
             if (recreateBCFileWithExternalLinkage(expectedGroup, externalFuncNames, fixedFilename, -1)) {
                 logger.logToIndividualLog(individualLog, "重新生成修复后的BC文件: " + fixedFilename, true);
 
@@ -542,7 +548,7 @@ bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unor
                     // 替换原文件
                     llvm::sys::fs::remove(filename);
                     llvm::sys::fs::rename(fixedFilename, filename);
-                    logger.logToIndividualLog(individualLog, "已替换原文件: " + filename, true);
+                    logger.logToIndividualLog(individualLog, "已替换原文件: " + filename.str(), true);
 
                     individualLog.close();
                     return true;
@@ -565,7 +571,7 @@ bool BCVerifier::verifyAndFixBCFile(const std::string& filename, const std::unor
 }
 
 // 修改批量验证方法，为每个文件创建独立日志
-void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isCloneMode) {
+void BCVerifier::validateAllBCFiles(llvm::StringRef outputPrefix, bool isCloneMode) {
     logger.log("\n=== 开始批量验证所有BC文件 ===");
 
     int totalFiles = 0;
@@ -573,7 +579,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
     std::string pathPrefix = config.workSpace + "output/";
 
     // 检查全局变量组
-    std::string globalsFilename = outputPrefix + "_group_globals.bc";
+    std::string globalsFilename = outputPrefix.str() + "_group_globals.bc";
     if (llvm::sys::fs::exists(pathPrefix + globalsFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(globalsFilename, "_validation");
@@ -587,7 +593,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
     }
 
     // 检查外部链接函数组
-    std::string externalFilename = outputPrefix + "_group_external.bc";
+    std::string externalFilename = outputPrefix.str() + "_group_external.bc";
     if (llvm::sys::fs::exists(pathPrefix + externalFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(externalFilename, "_validation");
@@ -610,7 +616,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
     }
 
     // 检查高入度函数组
-    std::string highInDegreeFilename = outputPrefix + "_group_high_in_degree.bc";
+    std::string highInDegreeFilename = outputPrefix.str() + "_group_high_in_degree.bc";
     if (llvm::sys::fs::exists(pathPrefix + highInDegreeFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(highInDegreeFilename, "_validation");
@@ -633,7 +639,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
     }
 
     // 检查孤立函数组
-    std::string isolatedFilename = outputPrefix + "_group_isolated.bc";
+    std::string isolatedFilename = outputPrefix.str() + "_group_isolated.bc";
     if (llvm::sys::fs::exists(pathPrefix + isolatedFilename)) {
         totalFiles++;
         std::ofstream individualLog = logger.createIndividualLogFile(isolatedFilename, "_validation");
@@ -657,7 +663,7 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 
     // 检查新的分组范围（组4-9）
     for (int i = 4; i <= 9; i++) {
-        std::string filename = outputPrefix + "_group_" + std::to_string(i) + ".bc";
+        std::string filename = outputPrefix.str() + "_group_" + std::to_string(i) + ".bc";
 
         if (!llvm::sys::fs::exists(pathPrefix + filename)) {
             continue;
@@ -703,18 +709,18 @@ void BCVerifier::validateAllBCFiles(const std::string& outputPrefix, bool isClon
 }
 
 // 修改详细分析BC文件内容方法，添加独立日志支持
-void BCVerifier::analyzeBCFileContent(const std::string& filename) {
+void BCVerifier::analyzeBCFileContent(llvm::StringRef filename) {
     // 创建独立日志文件
     std::ofstream individualLog = logger.createIndividualLogFile(filename, "_analysis");
 
-    logger.logToIndividualLog(individualLog, "开始详细分析BC文件内容: " + filename, true);
+    logger.logToIndividualLog(individualLog, "开始详细分析BC文件内容: " + filename.str(), true);
 
     llvm::LLVMContext tempContext;
     llvm::SMDiagnostic err;
-    auto testModule = parseIRFile(config.workSpace + "output/" + filename, err, tempContext);
+    auto testModule = parseIRFile(config.workSpace + "output/" + filename.str(), err, tempContext);
 
     if (!testModule) {
-        logger.logToIndividualLog(individualLog, "错误: 无法分析BC文件内容: " + filename, true);
+        logger.logToIndividualLog(individualLog, "错误: 无法分析BC文件内容: " + filename.str(), true);
         individualLog.close();
         return;
     }
@@ -761,14 +767,14 @@ void BCVerifier::analyzeBCFileContent(const std::string& filename) {
 }
 
 // 修改后的重新生成BC文件方法，使用专门的无名函数修复
-bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm::Function*>& group,
-                                    const std::unordered_set<std::string>& externalFuncNames,
-                                    const std::string& filename,
+bool BCVerifier::recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::Function*>& group,
+                                    const llvm::StringSet<>& externalFuncNames,
+                                    llvm::StringRef filename,
                                     int groupIndex) {
-    logger.logToFile("重新生成BC文件: " + filename + " (应用external链接)");
+    logger.logToFile("重新生成BC文件: " + filename.str() + " (应用external链接)");
     logger.logToFile("需要修复的函数数量: " + std::to_string(externalFuncNames.size()));
 
-    std::unordered_map<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
+    llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap = common.getFunctionMap();
     llvm::Module* M = common.getModule();
 
     // 统计无名函数数量
@@ -788,7 +794,7 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
     newM->setDataLayout(M->getDataLayout());
 
     // 首先创建所有函数（保持原始链接属性）
-    std::unordered_map<std::string, llvm::Function*> newFunctions;
+    llvm::StringMap<llvm::Function*> newFunctions;
 
     for (llvm::Function* origF : group) {
         if (!origF) continue;
@@ -870,7 +876,7 @@ bool BCVerifier::recreateBCFileWithExternalLinkage(const std::unordered_set<llvm
 }
 
 // 新增：专门处理无名函数的修复方法
-void BCVerifier::batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& M, const std::unordered_set<std::string>& externalFuncNames) {
+void BCVerifier::batchFixFunctionLinkageWithUnnamedSupport(llvm::Module& M, const llvm::StringSet<>& externalFuncNames) {
     logger.logToFile("批量修复函数链接属性（支持无名函数）...");
 
     int fixedCount = 0;

@@ -16,38 +16,38 @@ Logger::~Logger() {
     if (logFile.is_open()) logFile.close();
 }
 
-void Logger::log(const std::string& message) {
+void Logger::log(llvm::StringRef message) {
     if (logFile.is_open()) {
-        logFile << message << std::endl;
+        logFile << message.str() << std::endl;
     }
-    std::cout << message << std::endl;
+    std::cout << message.str() << std::endl;
 }
 
-void Logger::logError(const std::string& message) {
-    std::string errorMsg = "[ERROR] " + message;
+void Logger::logError(llvm::StringRef message) {
+    std::string errorMsg = "[ERROR] " + message.str();
     if (logFile.is_open()) {
         logFile << errorMsg << std::endl;
     }
     std::cerr << errorMsg << std::endl;
 }
 
-void Logger::logWarning(const std::string& message) {
-    std::string warnMsg = "[WARNING] " + message;
+void Logger::logWarning(llvm::StringRef message) {
+    std::string warnMsg = "[WARNING] " + message.str();
     if (logFile.is_open()) {
         logFile << warnMsg << std::endl;
     }
     std::cout << warnMsg << std::endl;
 }
 
-void Logger::logToFile(const std::string& message) {
+void Logger::logToFile(llvm::StringRef message) {
     if (logFile.is_open()) {
-        logFile << message << std::endl;
+        logFile << message.str() << std::endl;
     }
 }
 
-std::ofstream Logger::createIndividualLogFile(const std::string& bcFilename, const std::string& suffix) {
+std::ofstream Logger::createIndividualLogFile(llvm::StringRef bcFilename, llvm::StringRef suffix) {
     Config config;
-    std::string logFilename = config.workSpace + "logs/" + bcFilename;
+    std::string logFilename = config.workSpace + "logs/" + bcFilename.str();
 
     if (!suffix.empty()) {
         logFilename += suffix;
@@ -57,16 +57,16 @@ std::ofstream Logger::createIndividualLogFile(const std::string& bcFilename, con
     std::ofstream individualLog;
     individualLog.open(logFilename, std::ios::out | std::ios::app);
     if (individualLog.is_open()) {
-        individualLog << "=== BC文件验证日志: " << bcFilename << " ===" << std::endl;
+        individualLog << "=== BC文件验证日志: " << bcFilename.str() << " ===" << std::endl;
     } else {
         logError("无法创建独立日志文件: " + logFilename);
     }
     return individualLog;
 }
 
-void Logger::logToIndividualLog(std::ofstream& individualLog, const std::string& message, bool echoToMain) {
+void Logger::logToIndividualLog(std::ofstream& individualLog, llvm::StringRef message, bool echoToMain) {
     if (individualLog.is_open()) {
-        individualLog << message << std::endl;
+        individualLog << message.str() << std::endl;
     }
     if (echoToMain) {
         logToFile(message);

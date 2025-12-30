@@ -6,6 +6,10 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SetVector.h"
 #include <sstream>
 
 FunctionInfo::FunctionInfo(llvm::Function* F, int seqNum) {
@@ -283,8 +287,8 @@ std::string FunctionInfo::getBriefInfo() const {
  * @throws std::invalid_argument 如果F不在group或functionMap中
  */
 bool FunctionInfo::areAllCallersInGroup(llvm::Function* F,
-                         const std::unordered_set<llvm::Function*>& group,
-                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
+                         const llvm::DenseSet<llvm::Function*>& group,
+                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap) {
     // 参数检查
     if (group.find(F) == group.end()) {
         throw std::invalid_argument("Function must be in the group");
@@ -340,8 +344,8 @@ bool FunctionInfo::areAllCallersInGroup(llvm::Function* F,
  * @throws std::invalid_argument 如果F不在group或functionMap中
  */
 bool FunctionInfo::areAllCalledsInGroup(llvm::Function* F,
-                         const std::unordered_set<llvm::Function*>& group,
-                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap) {
+                         const llvm::DenseSet<llvm::Function*>& group,
+                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap) {
     // 参数检查
     if (group.find(F) == group.end()) {
         throw std::invalid_argument("Function must be in the group");

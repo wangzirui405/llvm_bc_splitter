@@ -17,14 +17,14 @@ public:
     ~Logger();
 
     // 基本日志方法
-    void log(const std::string& message);
-    void logError(const std::string& message);
-    void logWarning(const std::string& message);
-    void logToFile(const std::string& message);
+    void log(llvm::StringRef message);
+    void logError(llvm::StringRef message);
+    void logWarning(llvm::StringRef message);
+    void logToFile(llvm::StringRef message);
 
     // 独立日志文件支持
-    std::ofstream createIndividualLogFile(const std::string& bcFilename, const std::string& suffix = "");
-    void logToIndividualLog(std::ofstream& individualLog, const std::string& message, bool echoToMain = false);
+    std::ofstream createIndividualLogFile(llvm::StringRef bcFilename, llvm::StringRef suffix = "");
+    void logToIndividualLog(std::ofstream& individualLog, llvm::StringRef message, bool echoToMain = false);
 
     // 日志配置
     bool isOpen() const { return logFile.is_open(); }

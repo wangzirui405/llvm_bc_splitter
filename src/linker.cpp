@@ -26,6 +26,9 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
@@ -33,24 +36,23 @@
 
 BCLinker::BCLinker(BCCommon& commonRef) : common(commonRef) {}
 
-std::vector<std::string> BCLinker::readResponseFile() {
+llvm::SmallVector<llvm::StringRef, 200> BCLinker::readResponseFile() {
     logger.log("读取原response文件...");
 
-    std::vector<std::string> lines;
+    llvm::SmallVector<llvm::StringRef, 200> lines;
     std::string filename = config.responseFile;
-    std::ifstream file(filename);
-    if (!file.is_open()) {
+
+    // 使用 LLVM 的 MemoryBuffer 高效读取
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(filename);
+    if (!bufferOrErr) {
         logger.logError("无法打开response文件: " + filename);
         return lines;
     }
 
-    std::string line;
-    //logger.logToFile("############################################################");
-    while (std::getline(file, line)) {
-        lines.push_back(line);
-        //logger.logToFile(line);
-    }
-    file.close();
+    // 按行分割，不复制字符串
+    llvm::StringRef content = bufferOrErr.get()->getBuffer();
+    content.split(lines, '\n');
+
     return lines;
 }
 
@@ -135,7 +137,7 @@ void BCLinker::printFileMapDetails() {
     }
 }
 
-void BCLinker::generateInputFiles(const std::string& outputPrefix) {
+void BCLinker::generateInputFiles(llvm::StringRef outputPrefix) {
     logger.log("补全入参涉及的输入文件...");
 
     const auto& fileMap = common.getFileMap();
@@ -159,10 +161,10 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
                                  ("response_group_" + std::to_string(groupId) + "_with_dep.txt"));
 
         for (const auto& line : originalLines) {
-            std::string modifiedLine = line;
+            std::string modifiedLine = line.str();
 
             // 修改soname
-            if (line.find("-o libkn.so") != std::string::npos) {
+            if (line.find("-o libkn.so") != llvm::StringRef::npos) {
                 modifiedLine = "-o libkn_" + std::to_string(groupId) + ".so";
 
                 // 写入无依赖版本
@@ -173,7 +175,7 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
 
                 continue;
             }
-            if (line.find("--soname libkn.so") != std::string::npos) {
+            if (line.find("--soname libkn.so") != llvm::StringRef::npos) {
                 modifiedLine = "--soname libkn_" + std::to_string(groupId) + ".so";
                 // 写入无依赖版本
                 fileNoDep << modifiedLine << std::endl;
@@ -196,7 +198,7 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
                 continue;
             }
             // 修改依赖的bc
-            if (line.find(config.relativeDir + "out.bc") != std::string::npos) {
+            if (line.find(config.relativeDir + "out.bc") != llvm::StringRef::npos) {
                 modifiedLine = config.relativeDir + fileMap[groupId]->bcFile;
 
                 // 写入无依赖版本
@@ -209,18 +211,18 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
             }
 
             // 处理--defsym行
-            if (line.find("--defsym __cxa_demangle=Konan_cxa_demangle") != std::string::npos) {
+            if (line.find("--defsym __cxa_demangle=Konan_cxa_demangle") != llvm::StringRef::npos) {
                 // 只有包含Konan_cxa_demangle的组才保留该行
                 if (fileMap[groupId]->hasKonanCxaDemangle) {
-                    fileNoDep << line << std::endl;
-                    fileWithDep << line << std::endl;
+                    fileNoDep << line.str() << std::endl;
+                    fileWithDep << line.str() << std::endl;
                 }
                 continue;
             }
 
             // 其他行直接写入
-            fileNoDep << line << std::endl;
-            fileWithDep << line << std::endl;
+            fileNoDep << line.str() << std::endl;
+            fileWithDep << line.str() << std::endl;
         }
 
         fileNoDep.close();
@@ -233,15 +235,15 @@ void BCLinker::generateInputFiles(const std::string& outputPrefix) {
 
 }
 
-bool BCLinker::executeLdLld(const std::string& responseFilePath, const std::string& extralCommand) {
+bool BCLinker::executeLdLld(llvm::StringRef responseFilePath, llvm::StringRef extralCommand) {
     Logger logger;
     Config config;
-    std::string command = "ld.lld @" + responseFilePath;
-    if (!extralCommand.empty()) command += " " + extralCommand;
+    std::string command = "ld.lld @" + responseFilePath.str();
+    if (!extralCommand.empty()) command += " " + extralCommand.str();
     //logger.log("---- 执行命令: " + command);
 
     // 创建日志文件路径
-    std::filesystem::path responsePath(responseFilePath);
+    std::filesystem::path responsePath(responseFilePath.str());
     std::string logFilePath = config.workSpace + "logs/" + responsePath.stem().string() + "_output.log";
 
     // 修改命令以重定向输出到文件
@@ -332,7 +334,7 @@ bool BCLinker::executeAllGroups() {
     std::vector<std::promise<bool>> promises(groups.size());
 
     // 为每个组创建promise和future
-    std::unordered_map<int, std::future<bool>> groupFutures;
+    llvm::DenseMap<int, std::future<bool>> groupFutures;
     int idx = 0;
     for (int groupId = 0; groupId < groups.size(); groupId++) {
         groupFutures[groupId] = promises[idx].get_future();

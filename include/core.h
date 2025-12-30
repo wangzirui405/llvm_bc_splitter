@@ -56,10 +56,10 @@ struct FunctionInfo {
     bool isCommon = false;                   // 是否Common链接
 
     // 函数使用信息
-    std::unordered_set<llvm::Function*> callerFunctions;
-    std::unordered_set<llvm::Function*> calledFunctions;
-    std::unordered_set<llvm::Function*> personalityCalledFunctions;      // personality函数（异常处理函数）
-    std::unordered_set<llvm::Function*> personalityCallerFunctions;
+    llvm::DenseSet<llvm::Function*> callerFunctions;
+    llvm::DenseSet<llvm::Function*> calledFunctions;
+    llvm::DenseSet<llvm::Function*> personalityCalledFunctions;      // personality函数（异常处理函数）
+    llvm::DenseSet<llvm::Function*> personalityCallerFunctions;
 
     FunctionInfo() = default;
     FunctionInfo(llvm::Function* F, int seqNum = -1);
@@ -90,12 +90,12 @@ struct FunctionInfo {
     void updateAttributesFromLLVM();
     // 判断指定函数的调用者是否全部在指定的组中
     static bool areAllCallersInGroup(llvm::Function* F,
-                         const std::unordered_set<llvm::Function*>& group,
-                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
+                         const llvm::DenseSet<llvm::Function*>& group,
+                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap);
     // 判断指定函数的被调用者是否全部在指定的组中
     static bool areAllCalledsInGroup(llvm::Function* F,
-                         const std::unordered_set<llvm::Function*>& group,
-                         const std::unordered_map<llvm::Function*, FunctionInfo>& functionMap);
+                         const llvm::DenseSet<llvm::Function*>& group,
+                         const llvm::DenseMap<llvm::Function*, FunctionInfo>& functionMap);
 
 };
 
@@ -123,8 +123,8 @@ struct GlobalVariableInfo {
     bool isCommon = false;                   // 是否Common链接
 
     // 全局变量使用信息
-    std::unordered_set<llvm::Function*> calleds;
-    std::unordered_set<llvm::Function*> callers;
+    llvm::DenseSet<llvm::Function*> calleds;
+    llvm::DenseSet<llvm::Function*> callers;
 
     GlobalVariableInfo() = default;
     GlobalVariableInfo(llvm::GlobalVariable* GV, int seqNum = -1);
