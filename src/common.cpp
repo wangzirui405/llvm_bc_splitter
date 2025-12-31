@@ -166,7 +166,7 @@ std::string BCCommon::renameUnnamedGlobals(llvm::StringRef filename) {
 
 // 安全的bitcode写入方法
 bool BCCommon::writeBitcodeSafely(llvm::Module &M, llvm::StringRef filename) {
-    logger.logToFile("安全写入bitcode: " + filename.str());
+    logger.logToFile("✓ 安全写入bitcode: " + filename.str());
 
     std::error_code ec;
     llvm::raw_fd_ostream outFile(config.workSpace + "output/" + filename.str(), ec, llvm::sys::fs::OF_None);
@@ -178,7 +178,7 @@ bool BCCommon::writeBitcodeSafely(llvm::Module &M, llvm::StringRef filename) {
     try {
         llvm::WriteBitcodeToFile(M, outFile);
         outFile.close();
-        logger.log("成功写入: " + filename.str());
+        logger.log("✓ 成功写入: " + filename.str());
         return true;
     } catch (const std::exception &e) {
         logger.logError("写入bitcode时发生异常: " + std::string(e.what()));

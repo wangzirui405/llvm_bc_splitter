@@ -5,6 +5,7 @@
 #include "common.h"
 #include "core.h"
 #include "logging.h"
+#include "optimizer.h"
 #include "verifier.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -33,6 +34,7 @@ class BCModuleSplitter {
     Config config;
     Logger logger;
     BCVerifier verifier;
+    custom::CustomOptimizer optimizer;
 
     int totalGroups = 0;
     SplitMode currentMode = MANUAL_MODE;
@@ -90,6 +92,8 @@ class BCModuleSplitter {
     bool verifyAndFixBCFile(llvm::StringRef filename, const llvm::DenseSet<llvm::Function *> &expectedGroup);
     bool quickValidateBCFile(llvm::StringRef filename);
     void analyzeBCFileContent(llvm::StringRef filename);
+    // 编译优化
+    bool runOptimizationAndVerify(llvm::Module &M);
 
   private:
     // 私有辅助方法

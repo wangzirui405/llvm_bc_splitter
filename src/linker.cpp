@@ -362,7 +362,7 @@ bool BCLinker::executeAllGroups() {
         }
     }
     if (allSuccess)
-        logger.log("全部编译成功!");
+        logger.log("✓ 全部编译成功!");
 
     return allSuccess;
 }

@@ -331,7 +331,7 @@ void BCModuleSplitter::findAndRecordUsage(llvm::User *user, GlobalVariableInfo &
 
 // 更新后的生成分组报告方法，添加最终拆分完成后的bc文件的各个链接属性和可见性
 void BCModuleSplitter::generateGroupReport(llvm::StringRef outputPrefix) {
-    std::string reportFile = outputPrefix.str() + "_group_report.txt";
+    std::string reportFile = outputPrefix.str() + "_group_report.log";
     std::string pathPre = config.workSpace + "output/";
     auto &functionMap = common.getFunctionMap();
     auto &globalVariableMap = common.getGlobalVariableMap();
@@ -554,21 +554,21 @@ void BCModuleSplitter::generateGroupReport(llvm::StringRef outputPrefix) {
 
     int totalBCFiles = 0;
     int validBCFiles = 0;
-    llvm::StringSet<> existingFiles;
+    llvm::SmallVector<std::string> existingFiles;
 
     // 检查文件是否存在并统计
     for (const auto &bcFileInfo : fileMap) {
         std::string filename = bcFileInfo->bcFile;
         if (llvm::sys::fs::exists(pathPre + filename)) {
             totalBCFiles++;
-            existingFiles.insert(filename);
+            existingFiles.push_back(filename);
         }
     }
 
     report << "生成的BC文件总数: " << totalBCFiles << std::endl;
     report << "存在的BC文件列表:" << std::endl;
     for (const auto &file : existingFiles) {
-        report << "  " << file.getKey().str() << std::endl;
+        report << "  " << file << std::endl;
     }
 
     report << std::endl << "=== 报告生成完成 ===" << std::endl;
@@ -581,7 +581,7 @@ void BCModuleSplitter::generateGroupReport(llvm::StringRef outputPrefix) {
     // 同时在日志中输出关键统计信息
     logger.log("最终拆分完成: 共生成 " + std::to_string(totalBCFiles) + " 个BC文件");
     for (const auto &file : existingFiles) {
-        logger.log("  - " + file.getKey().str());
+        logger.log("  - " + file);
     }
 }
 
@@ -1099,6 +1099,7 @@ void BCModuleSplitter::splitBCFiles(llvm::StringRef outputPrefix) {
             fileCount++;
         } else {
             logger.logError("✗ 创建BC文件失败: " + filename);
+            coutRemainingGroup++;
         }
 
         groupIndex++;
@@ -1285,6 +1286,12 @@ bool BCModuleSplitter::createBCFileWithClone(const llvm::DenseSet<llvm::Function
     }
 
     logger.logToFile("Clone模式完成: " + filename.str() + " (包含 " + std::to_string(group.size()) + " 个函数)");
+
+    if (!runOptimizationAndVerify(*newM)) {
+        logger.logError("✗ 编译优化失败");
+        return false;
+    }
+
     return common.writeBitcodeSafely(*newM, filename);
 }
 
@@ -1383,6 +1390,25 @@ BCModuleSplitter::getFunctionGroupByRange(const llvm::SmallVector<std::pair<llvm
 }
 
 // 在 splitter.cpp 中添加这些方法的实现
+bool BCModuleSplitter::runOptimizationAndVerify(llvm::Module &M) {
+    // 1. 运行优化
+    if (!optimizer.runOptimization(M)) {
+        logger.logToFile("✗ 运行优化失败");
+        return false;
+    }
+
+    // 2. 验证优化后的模块
+    std::string ErrorInfo;
+    llvm::raw_string_ostream OS(ErrorInfo);
+    if (llvm::verifyModule(M, &OS)) {
+        logger.logToFile("✗ 编译优化后, 验证失败: " + ErrorInfo);
+        return false;
+    }
+
+    logger.log("✓ 编译优化已完成");
+
+    return true;
+}
 
 // 验证所有BC文件
 void BCModuleSplitter::validateAllBCFiles(llvm::StringRef outputPrefix) {
