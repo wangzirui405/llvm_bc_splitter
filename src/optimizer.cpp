@@ -4,6 +4,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/LinkAllPasses.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils.h"
 #include <fstream>
@@ -154,7 +155,13 @@ bool CustomOptimizer::runOptimization(llvm::Module &M) {
             logger.logToFile("Running LLVM O2 optimization pipeline");
         }
 
-        MPM.addPass(PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
+        if (auto Err = PB.parsePassPipeline(MPM, "objc-arc-contract")) {
+            logger.logError("[Optimizer] Could not parse pipeline: createObjCARCContractPass");
+            return false;
+        }
+
+        MPM.addPass(
+            PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2, llvm::ThinOrFullLTOPhase::FullLTOPostLink));
 
         if (Config.enable_debug) {
             logger.logToFile("[Optimizer] Running LLVM O2 optimization pipeline (end)");
