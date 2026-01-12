@@ -30,43 +30,63 @@ enum LinkageType {
     COMMON_LINKAGE                ///< 暂定定义
 };
 
-// 函数信息结构体
-struct FunctionInfo {
+// 全局对象类型枚举
+enum class GlobalValueType { FUNCTION, GLOBAL_VARIABLE };
+
+// 全局对象信息结构体
+struct GlobalValueInfo {
+    // 基本信息
+    GlobalValueType type;
     std::string name;
     std::string displayName;
-    llvm::Function *funcPtr = nullptr;
+    int preGroupIndex = -1;
+    int groupIndex = -1;
+    bool isPreProcessed = false;
+    bool isProcessed = false;
+    int sequenceNumber = -1; // 只有无名对象才有序号，有名对象为-1
+
+    llvm::GlobalValue *globalvaluePtr = nullptr;
+
+    // 链接属性
+    LinkageType linkage = EXTERNAL_LINKAGE;
+    std::string linkageString;
+    bool dsoLocal = false;
+    std::string visibility;
+    bool isDeclaration = false;
+    bool isDefinition = false;
+    bool isExternal = false;
+    bool isInternal = false;
+    bool isWeak = false;
+    bool isLinkOnce = false;
+    bool isCommon = false;
+
+    // 调用关系公共属性
     int outDegree = 0;
     int inDegree = 0;
-    int groupIndex = -1;
-    bool isProcessed = false;
-    bool isReferencedByGlobals = false;
-    int sequenceNumber = -1; // 只有无名函数才有序号，有名函数为-1
+    llvm::DenseSet<llvm::GlobalValue *> callers;
+    llvm::DenseSet<llvm::GlobalValue *> calleds;
 
-    // 新增的属性
-    LinkageType linkage = EXTERNAL_LINKAGE; // 链接属性
-    std::string linkageString;              // 链接属性字符串表示
-    bool dsoLocal = false;                  // DSO本地属性
-    std::string visibility;                 // 可见性属性
-    bool isDeclaration = false;             // 是否是声明（没有函数体）
-    bool isDefinition = false;              // 是否是定义（有函数体）
-    bool isExternal = false;                // 是否外部链接
-    bool isInternal = false;                // 是否内部链接
-    bool isWeak = false;                    // 是否弱链接
-    bool isLinkOnce = false;                // 是否LinkOnce链接
-    bool isCommon = false;                  // 是否Common链接
+    // 函数特有属性
+    struct {
+        // personality函数（异常处理函数）
+        llvm::DenseSet<llvm::Function *> personalityCalledFunctions;
+        llvm::DenseSet<llvm::Function *> personalityCallerFunctions;
+    } funcSpecific;
 
-    // 函数使用信息
-    llvm::DenseSet<llvm::Function *> callerFunctions;
-    llvm::DenseSet<llvm::Function *> calledFunctions;
-    llvm::DenseSet<llvm::Function *> personalityCalledFunctions; // personality函数（异常处理函数）
-    llvm::DenseSet<llvm::Function *> personalityCallerFunctions;
+    // 全局变量特有属性
+    struct {
+        bool isConstant = false;
+    } gvarSpecific;
 
-    FunctionInfo() = default;
-    FunctionInfo(llvm::Function *F, int seqNum = -1);
+    // 构造函数
+    GlobalValueInfo() = default;
 
-    // 获取函数类型描述
+    GlobalValueInfo(llvm::GlobalValue *GV, int seqNum = -1);
+
+    std::string getObjectType() const;
+    std::string getObjectTypeDescription() const;
     std::string getFunctionType() const;
-
+    std::string getGlobalVariableType() const;
     // 获取链接属性描述
     std::string getLinkageString() const;
 
@@ -89,67 +109,11 @@ struct FunctionInfo {
     // 从LLVM函数更新属性
     void updateAttributesFromLLVM();
     // 判断指定函数的调用者是否全部在指定的组中
-    static bool areAllCallersInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
-                                     const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap);
+    static bool areAllCallersInGroup(llvm::GlobalValue *GV, const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                     const llvm::DenseMap<llvm::GlobalValue *, GlobalValueInfo> &globalValueMap);
     // 判断指定函数的被调用者是否全部在指定的组中
-    static bool areAllCalledsInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
-                                     const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap);
-};
-
-// 全局变量信息结构体
-struct GlobalVariableInfo {
-    std::string name;
-    std::string displayName;
-    llvm::GlobalVariable *gvPtr = nullptr;
-    int groupIndex = -1;
-    bool isProcessed = false;
-    int sequenceNumber = -1; // 只有无名全局变量才有序号，有名全局变量为-1
-
-    // 新增的属性
-    LinkageType linkage = EXTERNAL_LINKAGE; // 链接属性
-    std::string linkageString;              // 链接属性字符串表示
-    bool dsoLocal = false;                  // DSO本地属性
-    std::string visibility;                 // 可见性属性
-    bool isConstant = false;                // 是否是常量
-    bool isDeclaration = false;             // 是否是声明
-    bool isDefinition = false;              // 是否是定义
-    bool isExternal = false;                // 是否外部链接
-    bool isInternal = false;                // 是否内部链接
-    bool isWeak = false;                    // 是否弱链接
-    bool isLinkOnce = false;                // 是否LinkOnce链接
-    bool isCommon = false;                  // 是否Common链接
-
-    // 全局变量使用信息
-    llvm::DenseSet<llvm::Function *> calleds;
-    llvm::DenseSet<llvm::Function *> callers;
-
-    GlobalVariableInfo() = default;
-    GlobalVariableInfo(llvm::GlobalVariable *GV, int seqNum = -1);
-
-    // 获取全局变量类型描述
-    std::string getGlobalVariableType() const;
-
-    // 获取链接属性描述
-    std::string getLinkageString() const;
-
-    // 获取链接类型简写
-    std::string getLinkageAbbreviation() const;
-
-    // 获取可见性描述
-    std::string getVisibilityString() const;
-
-    // 获取完整信息字符串
-    std::string getFullInfo() const;
-
-    // 获取简略信息字符串
-    std::string getBriefInfo() const;
-
-    // 判断是否是编译器生成的全局变量
-    bool isCompilerGenerated() const;
-    // 判断是否为无名全局变量
-    bool isUnnamed() const;
-    // 从LLVM全局变量更新属性
-    void updateAttributesFromLLVM();
+    static bool areAllCalledsInGroup(llvm::GlobalValue *GV, const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                     const llvm::DenseMap<llvm::GlobalValue *, GlobalValueInfo> &globalValueMap);
 };
 
 // 分组模式枚举
@@ -176,21 +140,13 @@ struct AttributeStats {
     int declarations = 0;
     int definitions = 0;
 
-    int unnamedFunctions = 0;
-    int namedFunctions = 0;
+    int unnamedGlobalValues = 0;
+    int namedGlobalValues = 0;
 
-    int externalFunctions = 0;
-    int internalFunctions = 0;
-    int weakFunctions = 0;
-    int linkOnceFunctions = 0;
-
-    int unnamedGlobalVariables = 0;
-    int namedGlobalVariables = 0;
-
-    int externalGlobalVariables = 0;
-    int internalGlobalVariables = 0;
-    int weakGlobalVariables = 0;
-    int linkOnceGlobalVariables = 0;
+    int externalGlobalValues = 0;
+    int internalGlobalValues = 0;
+    int weakGlobalValues = 0;
+    int linkOnceGlobalValues = 0;
 
     int compilerGenerated = 0;
 
@@ -198,12 +154,9 @@ struct AttributeStats {
     AttributeStats() = default;
     ~AttributeStats() = default;
 
-    void addFunctionInfo(const FunctionInfo &funcInfo);
-    void addGlobalVariableInfo(const GlobalVariableInfo &globalVariableInfo);
-    std::string getFunctionsSummary() const;
-    std::string getFunctionsLinkageSummary() const;
-    std::string getGlobalVariablesSummary() const;
-    std::string getGlobalVariablesLinkageSummary() const;
+    void addInfo(const GlobalValueInfo &GlobalValueInfo);
+    std::string getSummary() const;
+    std::string getLinkageSummary() const;
 };
 
 #endif // BC_SPLITTER_CORE_H

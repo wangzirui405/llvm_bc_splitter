@@ -12,37 +12,102 @@
 #include <cctype>
 #include <sstream>
 
-FunctionInfo::FunctionInfo(llvm::Function *F, int seqNum) {
-    funcPtr = F;
-    name = F->getName().str();
-    isDeclaration = F->isDeclaration();     // 是否是声明
-    isDefinition = F->hasExactDefinition(); // 是否是定义
+// 获取对象类型描述
+std::string GlobalValueInfo::getObjectType() const {
+    switch (type) {
+    case GlobalValueType::FUNCTION:
+        return "符号";
+    case GlobalValueType::GLOBAL_VARIABLE:
+        return "全局变量";
+    default:
+        return "Unknown";
+    }
+}
+
+// 获取对象类型描述
+std::string GlobalValueInfo::getObjectTypeDescription() const {
+    if (type == GlobalValueType::FUNCTION) {
+        return getFunctionType();
+    } else {
+        return getGlobalVariableType();
+    }
+}
+
+// 获取符号类型描述（仅符号有效）
+std::string GlobalValueInfo::getFunctionType() const {
+    if (type != GlobalValueType::FUNCTION)
+        return "";
+
+    std::string prefix = "";
+    if (isUnnamed()) {
+        prefix = "[序号:" + std::to_string(sequenceNumber) + "]无名";
+    } else {
+        prefix = "有名";
+    }
+
+    if (isDeclaration)
+        return prefix + "符号(声明)";
+    if (isDefinition)
+        return prefix + "符号(定义)";
+
+    return prefix + "符号";
+}
+
+// 获取全局变量类型描述（仅全局变量有效）
+std::string GlobalValueInfo::getGlobalVariableType() const {
+    if (type != GlobalValueType::GLOBAL_VARIABLE)
+        return "";
+
+    std::string typeDesc;
+    if (gvarSpecific.isConstant)
+        typeDesc += "Constant ";
+    typeDesc += "Global Variable";
+    if (isDeclaration)
+        typeDesc += " Declaration";
+    if (isDefinition)
+        typeDesc += " Definition";
+    return typeDesc;
+}
+
+GlobalValueInfo::GlobalValueInfo(llvm::GlobalValue *GV, int seqNum) {
+    globalvaluePtr = GV;
+    name = GV->getName().str();
+    isDeclaration = GV->isDeclaration();     // 是否是声明
+    isDefinition = GV->hasExactDefinition(); // 是否是定义
 
     // 更新LLVM相关属性
     updateAttributesFromLLVM();
 
-    // 检测是否为无名函数
+    // 如果是全局变量，更新isConstant属性
+    if (auto *GVar = llvm::dyn_cast<llvm::GlobalVariable>(GV)) {
+        gvarSpecific.isConstant = GVar->isConstant();
+        type = GlobalValueType::GLOBAL_VARIABLE;
+    } else if (auto *F = llvm::dyn_cast<llvm::Function>(GV)) {
+        type = GlobalValueType::FUNCTION;
+    }
+
+    // 检测是否为无名符号
     bool isUnnamedFunc = isUnnamed();
 
     if (isUnnamedFunc) {
-        // 只有无名函数才分配序号
+        // 只有无名符号才分配序号
         sequenceNumber = seqNum;
         displayName = "__unnamed_" + std::to_string(seqNum);
     } else {
-        // 有名函数没有序号
+        // 有名符号没有序号
         sequenceNumber = -1;
         displayName = name;
     }
 }
 
-bool FunctionInfo::isUnnamed() const {
+bool GlobalValueInfo::isUnnamed() const {
     if (name.empty())
         return true;
 
-    // 检查常见的无名函数模式
+    // 检查常见的无名符号模式
     if (name.find("__unnamed_") == 0)
         return true;
-    // 检查单字母函数名（可能是简化的内部函数）
+    // 检查单字母符号名（可能是简化的内部符号）
     if (name == "d" || name == "t" || name == "b" || name == "f" || name == "g" || name == "h" || name == "i" ||
         name == "j" || name == "k") {
         return true;
@@ -55,17 +120,27 @@ bool FunctionInfo::isUnnamed() const {
     return false;
 }
 
-std::string FunctionInfo::getFunctionType() const {
-    if (isUnnamed()) {
-        return "无名函数 [序号:" + std::to_string(sequenceNumber) + "]";
-    } else {
-        return "有名函数";
-    }
+bool GlobalValueInfo::isCompilerGenerated() const {
+    // 检查是否是编译器生成的符号
+    if (isUnnamed())
+        return true;
+
+    // 检查常见编译器生成符号模式
+    if (name.find("llvm.") == 0)
+        return true; // LLVM内置符号
+    if (name.find("__llvm") == 0)
+        return true; // LLVM编译器生成
+    if (name.find("__clang") == 0)
+        return true; // Clang生成
+    if (name.find("__gcc") == 0)
+        return true; // GCC生成
+
+    return false;
 }
 
-std::string FunctionInfo::getLinkageString() const { return linkageString; }
+std::string GlobalValueInfo::getLinkageString() const { return linkageString; }
 
-std::string FunctionInfo::getLinkageAbbreviation() const {
+std::string GlobalValueInfo::getLinkageAbbreviation() const {
     switch (linkage) {
     case EXTERNAL_LINKAGE:
         return "EXT";
@@ -94,19 +169,19 @@ std::string FunctionInfo::getLinkageAbbreviation() const {
     }
 }
 
-std::string FunctionInfo::getVisibilityString() const {
+std::string GlobalValueInfo::getVisibilityString() const {
     if (visibility.empty()) {
         return "未知可见性";
     }
     return visibility;
 }
 
-void FunctionInfo::updateAttributesFromLLVM() {
-    if (!funcPtr)
+void GlobalValueInfo::updateAttributesFromLLVM() {
+    if (!globalvaluePtr)
         return;
 
     // 获取链接属性
-    llvm::GlobalValue::LinkageTypes llvmLinkage = funcPtr->getLinkage();
+    llvm::GlobalValue::LinkageTypes llvmLinkage = globalvaluePtr->getLinkage();
 
     // 转换为我们的枚举类型
     switch (llvmLinkage) {
@@ -170,10 +245,10 @@ void FunctionInfo::updateAttributesFromLLVM() {
     }
 
     // 获取DSO本地属性
-    dsoLocal = funcPtr->isDSOLocal();
+    dsoLocal = globalvaluePtr->isDSOLocal();
 
     // 获取可见性属性
-    switch (funcPtr->getVisibility()) {
+    switch (globalvaluePtr->getVisibility()) {
     case llvm::GlobalValue::DefaultVisibility:
         visibility = "Default";
         break;
@@ -189,29 +264,11 @@ void FunctionInfo::updateAttributesFromLLVM() {
     }
 }
 
-bool FunctionInfo::isCompilerGenerated() const {
-    // 检查是否是编译器生成的函数
-    if (isUnnamed())
-        return true;
-
-    // 检查常见编译器生成函数模式
-    if (name.find("llvm.") == 0)
-        return true; // LLVM内置函数
-    if (name.find("__llvm") == 0)
-        return true; // LLVM编译器生成
-    if (name.find("__clang") == 0)
-        return true; // Clang生成
-    if (name.find("__gcc") == 0)
-        return true; // GCC生成
-
-    return false;
-}
-
-std::string FunctionInfo::getFullInfo() const {
+std::string GlobalValueInfo::getFullInfo() const {
     std::stringstream ss;
 
     // 基本信息部分
-    ss << "========== 函数信息 ==========\n";
+    ss << "========== GV信息 ==========\n";
     ss << "显示名称: " << displayName << "\n";
     if (!name.empty()) {
         ss << "-- 内部名称: " << name << "\n";
@@ -219,7 +276,8 @@ std::string FunctionInfo::getFullInfo() const {
     if (sequenceNumber != -1) {
         ss << "序列号: #" << sequenceNumber << ", ";
     }
-    ss << "函数指针: " << (funcPtr ? "有效" : "空") << "\n";
+    ss << "类型: " << getObjectType() << ",";
+    ss << "指针: " << (globalvaluePtr ? "有效" : "空") << "\n";
 
     // 链接属性部分
     ss << "\n--- 链接属性 ---\n";
@@ -227,8 +285,10 @@ std::string FunctionInfo::getFullInfo() const {
     ss << "可见性: " << (visibility.empty() ? "默认" : visibility) << ", ";
     ss << "DSO本地: " << (dsoLocal ? "是" : "否") << ", ";
     ss << "是否声明: " << (isDeclaration ? "是" : "否") << ", ";
-    ss << "是否被全局引用: " << (isReferencedByGlobals ? "是" : "否") << ",";
-    ss << "是否定义: " << (isDefinition ? "是" : "否") << "; ";
+    ss << "是否定义: " << (isDefinition ? "是" : "否") << ", ";
+    if (type == GlobalValueType::GLOBAL_VARIABLE) {
+        ss << "是否为全局常量" << (gvarSpecific.isConstant ? "是" : "否") << "; ";
+    }
 
     // 详细链接类型
     ss << "外部链接: " << (isExternal ? "是" : "否") << ", ";
@@ -241,39 +301,44 @@ std::string FunctionInfo::getFullInfo() const {
     ss << "\n--- 调用关系 ---\n";
     ss << "入度: " << inDegree << ", ";
     ss << "出度: " << outDegree << "\n";
-    ss << "调用者数量: " << callerFunctions.size() << "\n";
-    if (callerFunctions.size() < 10) {
-        for (const auto *callerFunction : callerFunctions) {
-            ss << "  -- " << callerFunction->getName().str() << "\n";
+    ss << "调用者数量: " << callers.size() << "\n";
+    if (callers.size() < 10) {
+        for (const auto *caller : callers) {
+            ss << "  -- " << caller->getName().str() << "\n";
         }
     }
-    ss << "被调用函数数量: " << calledFunctions.size() << "\n";
-    if (calledFunctions.size() < 10) {
-        for (const auto *calledFunction : calledFunctions) {
-            ss << "  -- " << calledFunction->getName().str() << "\n";
+    ss << "被调用者数量: " << calleds.size() << "\n";
+    if (calleds.size() < 10) {
+        for (const auto *called : calleds) {
+            ss << "  -- " << called->getName().str() << "\n";
         }
     }
-    ss << "个性函数数量: " << personalityCalledFunctions.size() << "\n";
-    if (personalityCalledFunctions.size() < 10) {
-        for (const auto *personalityCalledFunction : personalityCalledFunctions) {
-            ss << "  -- " << personalityCalledFunction->getName().str() << "\n";
+    if (type == GlobalValueType::FUNCTION) {
+        ss << "个性符号数量: " << funcSpecific.personalityCalledFunctions.size() << "\n";
+        if (funcSpecific.personalityCalledFunctions.size() < 10) {
+            for (const auto *personalityCalledFunction : funcSpecific.personalityCalledFunctions) {
+                ss << "  -- " << personalityCalledFunction->getName().str() << "\n";
+            }
         }
     }
 
     return ss.str();
 }
 
-std::string FunctionInfo::getBriefInfo() const {
+std::string GlobalValueInfo::getBriefInfo() const {
     std::stringstream ss;
 
-    // 函数标识
+    // 符号标识
     if (sequenceNumber != -1) {
-        ss << "[Func#" << sequenceNumber << "] ";
+        ss << "[#" << sequenceNumber << "] ";
     }
     ss << displayName;
     if (!name.empty() && name != displayName) {
-        ss << " (" << name << ")";
+        ss << " (" << name << ", ";
+    } else {
+        ss << " (";
     }
+    ss << getObjectType() << ")";
 
     // 链接属性
     ss << " [" << linkageString;
@@ -297,54 +362,54 @@ std::string FunctionInfo::getBriefInfo() const {
 }
 
 /**
- * 判断指定函数的调用者是否全部在指定的组中
+ * 判断指定符号的调用者是否全部在指定的组中
  *
- * @param F 要检查的函数，该函数必须在group和functionMap中
- * @param group 函数组
- * @param functionMap 函数信息映射表
- * @return true 如果F的所有调用者都在group中
- * @return false 如果F有调用者不在group中
- * @throws std::invalid_argument 如果F不在group或functionMap中
+ * @param GV 要检查的符号，该符号必须在group和globalValueMap中
+ * @param group 符号组
+ * @param globalValueMap 符号信息映射表
+ * @return true 如果GV的所有调用者都在group中
+ * @return false 如果GV有调用者不在group中
+ * @throws std::invalid_argument 如果GV不在globalValueMap中
  */
-bool FunctionInfo::areAllCallersInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
-                                        const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap) {
+bool GlobalValueInfo::areAllCallersInGroup(llvm::GlobalValue *GV, const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                           const llvm::DenseMap<llvm::GlobalValue *, GlobalValueInfo> &globalValueMap) {
     // 参数检查
-    if (group.find(F) == group.end()) {
-        throw std::invalid_argument("Function must be in the group");
+    if (group.find(GV) == group.end()) {
+        throw std::invalid_argument("GlobalValue must be in the group");
     }
 
-    auto funcInfoIt = functionMap.find(F);
-    if (funcInfoIt == functionMap.end()) {
-        throw std::invalid_argument("Function must be in functionMap");
+    auto infoIt = globalValueMap.find(GV);
+    if (infoIt == globalValueMap.end()) {
+        throw std::invalid_argument("GlobalValue must be in globalValueMap");
     }
 
-    const auto &callerFunctions = funcInfoIt->second.callerFunctions;
+    const auto &callers = infoIt->second.callers;
 
-    // 如果函数没有调用者，那么所有调用者（没有）都在group中
-    if (callerFunctions.empty()) {
+    // 如果符号没有调用者，那么所有调用者（没有）都在group中
+    if (callers.empty()) {
         return true;
     }
 
-    // 获取当前函数的 isProcessed 状态
-    bool currentFuncProcessed = funcInfoIt->second.isProcessed;
+    // 获取当前符号的 isProcessed 状态
+    bool currentGVProcessed = infoIt->second.isProcessed;
 
     // 检查每个调用者是否都在group中，并检查 isProcessed 状态
-    for (llvm::Function *callerF : callerFunctions) {
+    for (llvm::GlobalValue *caller : callers) {
         // 检查调用者是否在group中
-        if (group.find(callerF) == group.end()) {
+        if (group.find(caller) == group.end()) {
             return false; // 发现一个不在group中的调用者
         }
 
         // 检查调用者的 isProcessed 状态
-        auto callerInfoIt = functionMap.find(callerF);
-        if (callerInfoIt == functionMap.end()) {
-            throw std::invalid_argument("Caller function must be in functionMap");
+        auto callerInfoIt = globalValueMap.find(caller);
+        if (callerInfoIt == globalValueMap.end()) {
+            throw std::invalid_argument("Caller globalValue must be in globalValueMap");
         }
 
         bool callerProcessed = callerInfoIt->second.isProcessed;
 
         // 如果一个已被处理一个未被处理，则一定不同组
-        if (currentFuncProcessed != callerProcessed) {
+        if (currentGVProcessed != callerProcessed) {
             return false;
         }
     }
@@ -353,266 +418,57 @@ bool FunctionInfo::areAllCallersInGroup(llvm::Function *F, const llvm::DenseSet<
 }
 
 /**
- * 判断指定函数的被调用者是否全部在指定的组中
+ * 判断指定符号的被调用者是否全部在指定的组中
  *
- * @param F 要检查的函数，该函数必须在group和functionMap中
- * @param group 函数组
- * @param functionMap 函数信息映射表
- * @return true 如果F的所有被调用者都在group中
- * @return false 如果F有被调用者不在group中
- * @throws std::invalid_argument 如果F不在group或functionMap中
+ * @param GV 要检查的符号，该符号必须在group和globalValueMap中
+ * @param group 符号组
+ * @param globalValueMap 符号信息映射表
+ * @return true 如果GV的所有被调用者都在group中
+ * @return false 如果GV有被调用者不在group中
+ * @throws std::invalid_argument 如果F不在group或globalValueMap中
  */
-bool FunctionInfo::areAllCalledsInGroup(llvm::Function *F, const llvm::DenseSet<llvm::Function *> &group,
-                                        const llvm::DenseMap<llvm::Function *, FunctionInfo> &functionMap) {
+bool GlobalValueInfo::areAllCalledsInGroup(llvm::GlobalValue *GV, const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                           const llvm::DenseMap<llvm::GlobalValue *, GlobalValueInfo> &globalValueMap) {
     // 参数检查
-    if (group.find(F) == group.end()) {
-        throw std::invalid_argument("Function must be in the group");
+    if (group.find(GV) == group.end()) {
+        throw std::invalid_argument("GlobalValue must be in the group");
     }
 
-    auto funcInfoIt = functionMap.find(F);
-    if (funcInfoIt == functionMap.end()) {
-        throw std::invalid_argument("Function must be in functionMap");
+    auto infoIt = globalValueMap.find(GV);
+    if (infoIt == globalValueMap.end()) {
+        throw std::invalid_argument("GlobalValue must be in globalValueMap");
     }
 
-    const auto &calledFunctions = funcInfoIt->second.calledFunctions;
+    const auto &calleds = infoIt->second.calleds;
 
-    // 如果函数没有被调用者，那么所有被调用者（没有）都在group中
-    if (calledFunctions.empty()) {
+    // 如果符号没有被调用者，那么所有被调用者（没有）都在group中
+    if (calleds.empty()) {
         return true;
     }
 
-    // 获取当前函数的 isProcessed 状态
-    bool currentFuncProcessed = funcInfoIt->second.isProcessed;
+    // 获取当前符号的 isProcessed 状态
+    bool currentGVProcessed = infoIt->second.isProcessed;
 
     // 检查每个被调用者是否都在group中，并检查 isProcessed 状态
-    for (llvm::Function *calledF : calledFunctions) {
+    for (llvm::GlobalValue *called : calleds) {
         // 检查被调用者是否在group中
-        if (group.find(calledF) == group.end()) {
+        if (group.find(called) == group.end()) {
             return false; // 发现一个不在group中的被调用者
         }
 
         // 检查被调用者的 isProcessed 状态
-        auto calledInfoIt = functionMap.find(calledF);
-        if (calledInfoIt == functionMap.end()) {
-            throw std::invalid_argument("Called function must be in functionMap");
+        auto calledInfoIt = globalValueMap.find(called);
+        if (calledInfoIt == globalValueMap.end()) {
+            throw std::invalid_argument("Called globalValue must be in globalValueMap");
         }
 
         bool calledProcessed = calledInfoIt->second.isProcessed;
 
         // 如果一个已被处理一个未被处理，则一定不同组
-        if (currentFuncProcessed != calledProcessed) {
+        if (currentGVProcessed != calledProcessed) {
             return false;
         }
     }
 
     return true; // 所有被调用者都在group中且isProcessed状态一致
-}
-
-GlobalVariableInfo::GlobalVariableInfo(llvm::GlobalVariable *GV, int seqNum) {
-    gvPtr = GV;
-    name = GV->getName().str();
-    isDeclaration = GV->isDeclaration();     // 是否是声明
-    isDefinition = GV->hasExactDefinition(); // 是否是定义
-
-    // 更新LLVM相关属性
-    updateAttributesFromLLVM();
-
-    // 检测是否为无名函数
-    bool isUnnamedFunc = isUnnamed();
-
-    if (isUnnamedFunc) {
-        // 只有无名函数才分配序号
-        sequenceNumber = seqNum;
-        displayName = "__unnamed_" + std::to_string(seqNum);
-    } else {
-        // 有名函数没有序号
-        sequenceNumber = -1;
-        displayName = name;
-    }
-}
-
-bool GlobalVariableInfo::isUnnamed() const {
-    if (name.empty())
-        return true;
-
-    // 检查常见的无名函数模式
-    if (name.find("__unnamed_") == 0)
-        return true;
-    // 检查单字母函数名（可能是简化的内部函数）
-    if (name == "d" || name == "t" || name == "b" || name == "f" || name == "g" || name == "h" || name == "i" ||
-        name == "j" || name == "k") {
-        return true;
-    }
-
-    // 检查是否全为数字
-    if (BCCommon::isNumberString(name))
-        return true;
-
-    return false;
-}
-
-std::string GlobalVariableInfo::getGlobalVariableType() const {
-    if (isUnnamed()) {
-        return "无名全局变量 [序号:" + std::to_string(sequenceNumber) + "]";
-    } else {
-        return "有名全局变量";
-    }
-}
-
-std::string GlobalVariableInfo::getLinkageString() const { return linkageString; }
-
-std::string GlobalVariableInfo::getLinkageAbbreviation() const {
-    switch (linkage) {
-    case EXTERNAL_LINKAGE:
-        return "EXT";
-    case AVAILABLE_EXTERNALLY_LINKAGE:
-        return "AVEXT";
-    case LINK_ONCE_ANY_LINKAGE:
-        return "LOA";
-    case LINK_ONCE_ODR_LINKAGE:
-        return "LOO";
-    case WEAK_ANY_LINKAGE:
-        return "WKA";
-    case WEAK_ODR_LINKAGE:
-        return "WKO";
-    case APPENDING_LINKAGE:
-        return "APP";
-    case INTERNAL_LINKAGE:
-        return "INT";
-    case PRIVATE_LINKAGE:
-        return "PRI";
-    case EXTERNAL_WEAK_LINKAGE:
-        return "EXWK";
-    case COMMON_LINKAGE:
-        return "COM";
-    default:
-        return "UNK";
-    }
-}
-
-std::string GlobalVariableInfo::getVisibilityString() const {
-    if (visibility.empty()) {
-        return "未知可见性";
-    }
-    return visibility;
-}
-
-void GlobalVariableInfo::updateAttributesFromLLVM() {
-    if (!gvPtr)
-        return;
-
-    // 获取常量属性
-    isConstant = gvPtr->isConstant();
-
-    // 获取链接属性
-    llvm::GlobalValue::LinkageTypes llvmLinkage = gvPtr->getLinkage();
-
-    // 转换为我们的枚举类型
-    switch (llvmLinkage) {
-    case llvm::GlobalValue::ExternalLinkage:
-        linkage = EXTERNAL_LINKAGE;
-        linkageString = "External";
-        isExternal = true;
-        break;
-    case llvm::GlobalValue::AvailableExternallyLinkage:
-        linkage = AVAILABLE_EXTERNALLY_LINKAGE;
-        linkageString = "AvailableExternally";
-        break;
-    case llvm::GlobalValue::LinkOnceAnyLinkage:
-        linkage = LINK_ONCE_ANY_LINKAGE;
-        linkageString = "LinkOnceAny";
-        isLinkOnce = true;
-        break;
-    case llvm::GlobalValue::LinkOnceODRLinkage:
-        linkage = LINK_ONCE_ODR_LINKAGE;
-        linkageString = "LinkOnceODR";
-        isLinkOnce = true;
-        break;
-    case llvm::GlobalValue::WeakAnyLinkage:
-        linkage = WEAK_ANY_LINKAGE;
-        linkageString = "WeakAny";
-        isWeak = true;
-        break;
-    case llvm::GlobalValue::WeakODRLinkage:
-        linkage = WEAK_ODR_LINKAGE;
-        linkageString = "WeakODR";
-        isWeak = true;
-        break;
-    case llvm::GlobalValue::AppendingLinkage:
-        linkage = APPENDING_LINKAGE;
-        linkageString = "Appending";
-        break;
-    case llvm::GlobalValue::InternalLinkage:
-        linkage = INTERNAL_LINKAGE;
-        linkageString = "Internal";
-        isInternal = true;
-        break;
-    case llvm::GlobalValue::PrivateLinkage:
-        linkage = PRIVATE_LINKAGE;
-        linkageString = "Private";
-        isInternal = true;
-        break;
-    case llvm::GlobalValue::ExternalWeakLinkage:
-        linkage = EXTERNAL_WEAK_LINKAGE;
-        linkageString = "ExternalWeak";
-        isWeak = true;
-        break;
-    case llvm::GlobalValue::CommonLinkage:
-        linkage = COMMON_LINKAGE;
-        linkageString = "Common";
-        isCommon = true;
-        break;
-    default:
-        linkage = EXTERNAL_LINKAGE;
-        linkageString = "Unknown";
-        break;
-    }
-
-    // 获取DSO本地属性
-    dsoLocal = gvPtr->isDSOLocal();
-
-    // 获取可见性属性
-    switch (gvPtr->getVisibility()) {
-    case llvm::GlobalValue::DefaultVisibility:
-        visibility = "Default";
-        break;
-    case llvm::GlobalValue::HiddenVisibility:
-        visibility = "Hidden";
-        break;
-    case llvm::GlobalValue::ProtectedVisibility:
-        visibility = "Protected";
-        break;
-    default:
-        visibility = "Unknown";
-        break;
-    }
-}
-
-bool GlobalVariableInfo::isCompilerGenerated() const {
-    // 检查是否是编译器生成的函数
-    if (isUnnamed())
-        return true;
-
-    // 检查常见编译器生成函数模式
-    if (name.find("llvm.") == 0)
-        return true; // LLVM内置函数
-    if (name.find("__llvm") == 0)
-        return true; // LLVM编译器生成
-    if (name.find("__clang") == 0)
-        return true; // Clang生成
-    if (name.find("__gcc") == 0)
-        return true; // GCC生成
-
-    return false;
-}
-
-std::string GlobalVariableInfo::getFullInfo() const {
-    return displayName + " [" + getGlobalVariableType() + ", 链接:" + getLinkageAbbreviation() + "(" +
-           getLinkageString() + ")" + ", DSO本地:" + (dsoLocal ? "是" : "否") + ", 可见性:" + getVisibilityString() +
-           ", 类型:" + (isDeclaration ? "声明" : "定义") + ", 常量:" + (isConstant ? "是" : "否") + "]";
-    //", 组:" + (groupIndex >= 0 ? std::to_string(groupIndex) : "未分组") + "]";
-}
-
-std::string GlobalVariableInfo::getBriefInfo() const {
-    return displayName + (isConstant ? " (常量)" : "") + (isDeclaration ? " (声明)" : " (定义)");
 }

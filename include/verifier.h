@@ -8,6 +8,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -32,9 +33,9 @@ class BCVerifier {
     std::string getVisibilityString(llvm::GlobalValue::VisibilityTypes visibility);
 
     // 函数名映射构建
-    void buildFunctionNameMapsWithLog(const llvm::DenseSet<llvm::Function *> &group,
-                                      llvm::StringMap<llvm::Function *> &nameToFunc,
-                                      llvm::StringMap<std::string> &escapedToOriginal, std::ofstream &individualLog);
+    void buildGlobalValueNameMapsWithLog(const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                         llvm::StringMap<llvm::GlobalValue *> &nameToGV,
+                                         llvm::StringMap<std::string> &escapedToOriginal, std::ofstream &individualLog);
 
   public:
     BCVerifier(BCCommon &commonRef);
@@ -46,10 +47,10 @@ class BCVerifier {
 
     // 错误分析和修复
     llvm::StringSet<> analyzeVerifierErrorsWithLog(llvm::StringRef verifyOutput,
-                                                   const llvm::DenseSet<llvm::Function *> &group,
+                                                   const llvm::DenseSet<llvm::GlobalValue *> &group,
                                                    std::ofstream &individualLog);
 
-    bool verifyAndFixBCFile(llvm::StringRef filename, const llvm::DenseSet<llvm::Function *> &expectedGroup);
+    bool verifyAndFixBCFile(llvm::StringRef filename, const llvm::DenseSet<llvm::GlobalValue *> &expectedGroup);
 
     // 批量验证
     void validateAllBCFiles(llvm::StringRef outputPrefix, bool isCloneMode);
@@ -58,10 +59,10 @@ class BCVerifier {
     void analyzeBCFileContent(llvm::StringRef filename);
 
     // 重命名和修复
-    bool recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::Function *> &group,
-                                           const llvm::StringSet<> &externalFuncNames, llvm::StringRef filename,
+    bool recreateBCFileWithExternalLinkage(const llvm::DenseSet<llvm::GlobalValue *> &group,
+                                           const llvm::StringSet<> &externalGVNames, llvm::StringRef filename,
                                            int groupIndex);
-    void batchFixFunctionLinkageWithUnnamedSupport(llvm::Module &M, const llvm::StringSet<> &externalFuncNames);
+    void batchFixGlobalValueLinkageWithUnnamedSupport(llvm::Module &M, const llvm::StringSet<> &externalGVNames);
 };
 
 #endif // BC_SPLITTER_VERIFIER_H

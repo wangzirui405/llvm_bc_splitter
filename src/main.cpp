@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
         // 生成报告
         splitter.generateGroupReport(outputPrefix);
 
-        // linker.printFileMapDetails();
+        linker.printFileMapDetails();
         // linker.readResponseFile();
         linker.generateInputFiles(outputPrefix);
         linker.enterInWorkDir();
